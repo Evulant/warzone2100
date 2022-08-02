@@ -35,6 +35,9 @@
 #include "radar.h"
 #include "activity.h"
 
+#define MAX_REPLAY_FILES 36
+constexpr int MAX_OLD_LOGS = 50;
+
 /***************************************************************************/
 
 struct WARZONE_GLOBALS
@@ -66,6 +69,8 @@ struct WARZONE_GLOBALS
 	bool autoAdjustDisplayScale = true;
 	int autoLagKickSeconds = 60;
 	bool disableReplayRecording = false;
+	int maxReplaysSaved = MAX_REPLAY_FILES;
+	int oldLogsLimit = MAX_OLD_LOGS;
 	uint32_t MPinactivityMinutes = 5;
 	uint8_t MPopenSpectatorSlots = 0;
 	int fogStart = 4000;
@@ -431,6 +436,26 @@ bool war_getDisableReplayRecording()
 void war_setDisableReplayRecording(bool disable)
 {
 	warGlobs.disableReplayRecording = disable;
+}
+
+int war_getMaxReplaysSaved()
+{
+	return warGlobs.maxReplaysSaved;
+}
+
+void war_setMaxReplaysSaved(int maxReplaysSaved)
+{
+	warGlobs.maxReplaysSaved = maxReplaysSaved;
+}
+
+int war_getOldLogsLimit()
+{
+	return warGlobs.oldLogsLimit;
+}
+
+void war_setOldLogsLimit(int oldLogsLimit)
+{
+	warGlobs.oldLogsLimit = oldLogsLimit;
 }
 
 uint32_t war_getMPInactivityMinutes()

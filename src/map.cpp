@@ -120,7 +120,7 @@ static void SetGroundForTile(const char *filename, const char *nametype);
 static int getTextureType(const char *textureType);
 static bool hasDecals(int i, int j);
 static void SetDecals(const char *filename, const char *decal_type);
-static void init_tileNames(int type);
+static void init_tileNames(MAP_TILESET type);
 
 /// The different ground types
 std::unique_ptr<GROUND_TYPE[]> psGroundTypes;
@@ -136,7 +136,7 @@ static std::unique_ptr<bool[]> mapDecals;           // array that tells us what 
 /* Look up table that returns the terrain type of a given tile texture */
 UBYTE terrainTypes[MAX_TILE_TEXTURES];
 
-static void init_tileNames(int type)
+static void init_tileNames(MAP_TILESET type)
 {
 	char	*pFileData = nullptr;
 	char	name[MAX_STR_LENGTH] = {'\0'};
@@ -147,7 +147,7 @@ static void init_tileNames(int type)
 
 	switch (type)
 	{
-	case ARIZONA:
+	case MAP_TILESET::ARIZONA:
 		{
 			if (!loadFileToBuffer("tileset/arizona_enum.txt", pFileData, FILE_LOAD_BUFFER_SIZE, &fileSize))
 			{
@@ -165,7 +165,7 @@ static void init_tileNames(int type)
 			}
 			break;
 		}
-	case URBAN:
+	case MAP_TILESET::URBAN:
 		{
 			if (!loadFileToBuffer("tileset/urban_enum.txt", pFileData, FILE_LOAD_BUFFER_SIZE, &fileSize))
 			{
@@ -183,7 +183,7 @@ static void init_tileNames(int type)
 			}
 			break;
 		}
-	case ROCKIE:
+	case MAP_TILESET::ROCKIES:
 		{
 			if (!loadFileToBuffer("tileset/rockie_enum.txt", pFileData, FILE_LOAD_BUFFER_SIZE, &fileSize))
 			{
@@ -201,9 +201,6 @@ static void init_tileNames(int type)
 			}
 			break;
 		}
-	default:
-		debug(LOG_FATAL, "Unknown type (%d) given.  Aborting.", type);
-		abort();
 	}
 
 	debug(LOG_TERRAIN, "name: %s, with %d entries", name, numlines);
@@ -249,11 +246,11 @@ static bool mapLoadGroundTypes(bool preview)
 	{
 fallback:
 		// load the override terrain types
-		if (!preview && builtInMap && !loadTerrainTypeMapOverride(ARIZONA))
+		if (!preview && builtInMap && !loadTerrainTypeMapOverride(MAP_TILESET::ARIZONA))
 		{
 			debug(LOG_POPUP, "Failed to load terrain type override");
 		}
-		init_tileNames(ARIZONA);
+		init_tileNames(MAP_TILESET::ARIZONA);
 		if (!loadFileToBuffer("tileset/tertilesc1hwGtype.txt", pFileData, FILE_LOAD_BUFFER_SIZE, &fileSize))
 		{
 			debug(LOG_FATAL, "tileset/tertilesc1hwGtype.txt not found, aborting.");
@@ -293,11 +290,11 @@ fallback:
 	else if (strcmp(tilesetDir, "texpages/tertilesc2hw") == 0)
 	{
 		// load the override terrain types
-		if (!preview && builtInMap && !loadTerrainTypeMapOverride(URBAN))
+		if (!preview && builtInMap && !loadTerrainTypeMapOverride(MAP_TILESET::URBAN))
 		{
 			debug(LOG_POPUP, "Failed to load terrain type override");
 		}
-		init_tileNames(URBAN);
+		init_tileNames(MAP_TILESET::URBAN);
 		if (!loadFileToBuffer("tileset/tertilesc2hwGtype.txt", pFileData, FILE_LOAD_BUFFER_SIZE, &fileSize))
 		{
 			debug(LOG_POPUP, "tileset/tertilesc2hwGtype.txt not found, using default terrain ground types.");
@@ -337,11 +334,11 @@ fallback:
 	else if (strcmp(tilesetDir, "texpages/tertilesc3hw") == 0)
 	{
 		// load the override terrain types
-		if (!preview && builtInMap && !loadTerrainTypeMapOverride(ROCKIE))
+		if (!preview && builtInMap && !loadTerrainTypeMapOverride(MAP_TILESET::ROCKIES))
 		{
 			debug(LOG_POPUP, "Failed to load terrain type override");
 		}
-		init_tileNames(ROCKIE);
+		init_tileNames(MAP_TILESET::ROCKIES);
 		if (!loadFileToBuffer("tileset/tertilesc3hwGtype.txt", pFileData, FILE_LOAD_BUFFER_SIZE, &fileSize))
 		{
 			debug(LOG_POPUP, "tileset/tertilesc3hwGtype.txt not found, using default terrain ground types.");
@@ -752,15 +749,15 @@ static bool afterMapLoad();
 class WzMapBinaryPhysFSStream : public WzMap::BinaryIOStream
 {
 public:
-	WzMapBinaryPhysFSStream(const char* pFilename, WzMap::BinaryIOStream::OpenMode mode)
+	WzMapBinaryPhysFSStream(const std::string& filename, WzMap::BinaryIOStream::OpenMode mode)
 	{
 		switch (mode)
 		{
 			case WzMap::BinaryIOStream::OpenMode::READ:
-				pFile = PHYSFS_openRead(pFilename);
+				pFile = PHYSFS_openRead(filename.c_str());
 				break;
 			case WzMap::BinaryIOStream::OpenMode::WRITE:
-				pFile = PHYSFS_openWrite(pFilename);
+				pFile = PHYSFS_openWrite(filename.c_str());
 				break;
 		}
 		if (pFile)
@@ -770,11 +767,7 @@ public:
 	}
 	virtual ~WzMapBinaryPhysFSStream()
 	{
-		if (pFile)
-		{
-			PHYSFS_close(pFile);
-			pFile = nullptr;
-		}
+		close();
 	};
 
 	bool openedFile() const { return pFile != nullptr; }
@@ -803,6 +796,18 @@ public:
 		return static_cast<size_t>(result);
 	}
 
+	virtual bool close() override
+	{
+		if (pFile == nullptr)
+		{
+			return false;
+		}
+
+		PHYSFS_close(pFile);
+		pFile = nullptr;
+		return true;
+	}
+
 	virtual bool endOfStream() override
 	{
 		if (!pFile) { return false; }
@@ -814,7 +819,7 @@ private:
 
 std::unique_ptr<WzMap::BinaryIOStream> WzMapPhysFSIO::openBinaryStream(const std::string& filename, WzMap::BinaryIOStream::OpenMode mode)
 {
-	WzMapBinaryPhysFSStream* pStream = new WzMapBinaryPhysFSStream(filename.c_str(), mode);
+	WzMapBinaryPhysFSStream* pStream = new WzMapBinaryPhysFSStream((m_basePath.empty()) ? filename : pathJoin(m_basePath, filename), mode);
 	if (!pStream->openedFile())
 	{
 		delete pStream;
@@ -825,16 +830,50 @@ std::unique_ptr<WzMap::BinaryIOStream> WzMapPhysFSIO::openBinaryStream(const std
 
 bool WzMapPhysFSIO::loadFullFile(const std::string& filename, std::vector<char>& fileData)
 {
-	if (!PHYSFS_exists(filename.c_str()))
+	std::string filenameFull = (m_basePath.empty()) ? filename : pathJoin(m_basePath, filename);
+	if (!PHYSFS_exists(filenameFull.c_str()))
 	{
 		return false;
 	}
-	return loadFileToBufferVector(filename.c_str(), fileData, true, true);
+	return loadFileToBufferVector(filenameFull.c_str(), fileData, true, true);
 }
 
 bool WzMapPhysFSIO::writeFullFile(const std::string& filename, const char *ppFileData, uint32_t fileSize)
 {
-	return saveFile(filename.c_str(), ppFileData, fileSize);
+	std::string filenameFull = (m_basePath.empty()) ? filename : pathJoin(m_basePath, filename);
+	return saveFile(filenameFull.c_str(), ppFileData, fileSize);
+}
+
+bool WzMapPhysFSIO::makeDirectory(const std::string& directoryPath)
+{
+	std::string directoryPathFull = (m_basePath.empty()) ? directoryPath : pathJoin(m_basePath, directoryPath);
+	return PHYSFS_mkdir(directoryPath.c_str()) != 0;
+}
+
+const char* WzMapPhysFSIO::pathSeparator() const
+{
+	return "/"; // the platform-independent PhysFS path separator
+}
+
+bool WzMapPhysFSIO::enumerateFiles(const std::string& basePath, const std::function<bool (const char* file)>& enumFunc)
+{
+	std::string basePathFull = (m_basePath.empty()) ? basePath : pathJoin(m_basePath, basePath);
+	return WZ_PHYSFS_enumerateFiles(basePathFull.c_str(), [basePathFull, enumFunc](const char* file) -> bool {
+		if (file == nullptr) { return true; }
+		if (*file == '\0') { return true; }
+		std::string fullPath = basePathFull + "/" + file;
+		if (WZ_PHYSFS_isDirectory(fullPath.c_str()))
+		{
+			return true; // skip and continue
+		}
+		return enumFunc(file);
+	});
+}
+
+bool WzMapPhysFSIO::enumerateFolders(const std::string& basePath, const std::function<bool (const char* file)>& enumFunc)
+{
+	std::string basePathFull = (m_basePath.empty()) ? basePath : pathJoin(m_basePath, basePath);
+	return WZ_PHYSFS_enumerateFolders(basePathFull.c_str(), enumFunc);
 }
 
 WzMapDebugLogger::~WzMapDebugLogger()

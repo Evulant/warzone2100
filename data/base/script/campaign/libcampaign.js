@@ -1,24 +1,22 @@
-//;; # libcampaign.js documentation
+//;; # `libcampaign.js` documentation
 //;;
-//;; ```libcampaign.js``` is a JavaScript library supplied with the game,
+//;; `libcampaign.js` is a JavaScript library supplied with the game,
 //;; which contains reusable code for campaign scenarios. It is designed to
 //;; make scenario development as high-level and declarative as possible.
 //;; It also contains a few simple convenient wrappers.
-//;; Public API functions of ```libcampaign.js``` are prefixed with
-//;; ```cam```. To use ```libcampaign.js```, add the following include
-//;; into your scenario code:
+//;; Public API functions of `libcampaign.js` are prefixed with `cam`.
+//;; To use `libcampaign.js`, add the following include into your scenario code:
 //;;
-//;; ```javascript
+//;; ```js
 //;; include("script/campaign/libcampaign.js");
 //;; ```
 //;;
-//;; Also, most of the ```libcampaign.js``` features require some of the
-//;; game events handled by the library. Transparent JavaScript pre-hooks are
-//;; therefore injected into your global event handlers upon include. For
-//;; example, if ```camSetArtifacts()``` was called to let
-//;; ```libcampaign.js``` manage scenario artifacts, then
-//;; ```eventPickup()``` will be first handled by the library, and only then
-//;; your handler will be called, if any.
+//;; Also, most of the `libcampaign.js` features require some of the game
+//;; events handled by the library. Transparent JavaScript pre-hooks are
+//;; therefore injected into your global event handlers upon include.
+//;; For example, if `camSetArtifacts()` was called to let `libcampaign.js`
+//;; manage scenario artifacts, then `eventPickup()` will be first handled
+//;; by the library, and only then your handler will be called, if any.
 //;; All of this happens automagically and does not normally require
 //;; your attention.
 //;;
@@ -131,7 +129,6 @@ var __camDebuggedOnce = {};
 var __camTracedOnce = {};
 
 //events
-var __camLastHitTime = 0;
 var __camSaveLoading;
 
 //group
@@ -210,19 +207,13 @@ var __camLZCompromisedTicker;
 var __camLastAttackTriggered;
 var __camLevelEnded;
 var __camExtraObjectiveMessage;
-var __camVictoryMessageThrottle;
+var __camAllowVictoryMsgClear;
 
 //video
 var __camVideoSequences;
 
 //vtol
-var __camVtolPlayer;
-var __camVtolStartPosition;
-var __camVtolTemplates;
-var __camVtolExitPosition;
-var __camVtolSpawnActive;
-var __camVtolSpawnStopObject;
-var __camVtolExtras;
+var __camVtolDataSystem;
 //////////globals vars end
 
 // A hack to make sure we do not put this variable into the savegame. It is

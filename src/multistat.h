@@ -26,8 +26,14 @@
 #define __INCLUDED_SRC_MULTISTATS_H__
 
 #include "lib/netplay/netplay.h"
-#include <3rdparty/json/json_fwd.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <map>
+#include <chrono>
+#include <nonstd/optional.hpp>
+using nonstd::optional;
+using nonstd::nullopt;
+
+#define WZ_DEFAULT_PUBLIC_RATING_LOOKUP_SERVICE_URL "https://wz2100-autohost.net/rating/"
 
 struct PLAYERSTATS
 {
@@ -53,6 +59,7 @@ struct PLAYERSTATS
 		uint8_t medal = 0;
 		uint8_t level = 0;
 		std::string elo;
+		std::string details;
 	};
 	Autorating autorating;
 
@@ -75,9 +82,20 @@ void initKnownPlayers();
 void shutdownKnownPlayers();
 bool isLocallyKnownPlayer(std::string const &name, EcKey const &key);
 void addKnownPlayer(std::string const &name, EcKey const &key, bool override = false);
+struct StoredPlayerOptions
+{
+	optional<std::chrono::system_clock::time_point> mutedTime;
+	optional<std::chrono::system_clock::time_point> bannedTime;
+};
+optional<StoredPlayerOptions> getStoredPlayerOptions(std::string const &name, EcKey const &key);
+void storePlayerMuteOption(std::string const &name, EcKey const &key, bool muted);
 
 uint32_t getMultiPlayUnitsKilled(uint32_t player);
+void setMultiPlayUnitsKilled(uint32_t player, uint32_t kills);
+uint32_t getMultiPlayRecentScore(uint32_t player);
+void setMultiPlayRecentScore(uint32_t player, uint32_t score);
 uint32_t getSelectedPlayerUnitsKilled();
+void resetRecentScoreData();
 
 bool saveMultiStatsToJSON(nlohmann::json& json);
 bool loadMultiStatsFromJSON(const nlohmann::json& json);

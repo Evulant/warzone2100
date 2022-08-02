@@ -96,14 +96,12 @@ static bool tryLoad(const WzString &path, const WzString &filename)
 
 const std::string &modelName(iIMDShape *model)
 {
-	for (const auto &pair : models)
+	if (model != nullptr)
 	{
-		if (&pair.second == model)
-		{
-			return pair.first;
-		}
+		ASSERT(!model->modelName.empty(), "An IMD pointer could not be backtraced to a filename!");
+		return model->modelName;
 	}
-	ASSERT(false, "An IMD pointer could not be backtraced to a filename!");
+	ASSERT(false, "Null IMD pointer??");
 	static std::string error;
 	return error;
 }
@@ -749,6 +747,7 @@ static iIMDShape *_imd_load_level(const WzString &filename, const char **ppFileD
 	}
 	ASSERT(models.count(key) == 0, "Duplicate model load for %s!", key.c_str());
 	iIMDShape &s = models[key]; // create entry and return reference
+	s.modelName = key;
 	s.pShadowPoints = &s.points;
 	s.pShadowPolys = &s.polys;
 

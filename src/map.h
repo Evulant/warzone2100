@@ -34,17 +34,6 @@
 #include "display.h"
 #include "ai.h"
 
-#define ARIZONA 1
-#define URBAN 2
-#define ROCKIE 3
-
-enum MAP_TILESET_TYPE
-{
-	TILESET_ARIZONA = 0,
-	TILESET_URBAN = 1,
-	TILESET_ROCKIES = 2
-};
-
 #define TALLOBJECT_YMAX		(200)
 #define TALLOBJECT_ADJUST	(300)
 
@@ -384,9 +373,21 @@ bool mapLoadFromWzMapData(std::shared_ptr<WzMap::MapData> mapData);
 class WzMapPhysFSIO : public WzMap::IOProvider
 {
 public:
+	WzMapPhysFSIO() { }
+	WzMapPhysFSIO(const std::string& baseMountPath)
+	: m_basePath(baseMountPath)
+	{ }
+public:
 	virtual std::unique_ptr<WzMap::BinaryIOStream> openBinaryStream(const std::string& filename, WzMap::BinaryIOStream::OpenMode mode) override;
 	virtual bool loadFullFile(const std::string& filename, std::vector<char>& fileData) override;
 	virtual bool writeFullFile(const std::string& filename, const char *ppFileData, uint32_t fileSize) override;
+	virtual bool makeDirectory(const std::string& directoryPath) override;
+	virtual const char* pathSeparator() const override;
+
+	virtual bool enumerateFiles(const std::string& basePath, const std::function<bool (const char* file)>& enumFunc) override;
+	virtual bool enumerateFolders(const std::string& basePath, const std::function<bool (const char* file)>& enumFunc) override;
+private:
+	std::string m_basePath;
 };
 
 class WzMapDebugLogger : public WzMap::LoggingProtocol
@@ -548,6 +549,8 @@ WZ_DECL_ALWAYS_INLINE static inline bool hasSensorOnTile(MAPTILE *psTile, unsign
 
 void mapInit();
 void mapUpdate();
+
+bool loadTerrainTypeMapOverride(MAP_TILESET tileSet);
 
 //For saves to determine if loading the terrain type override should occur
 extern bool builtInMap;

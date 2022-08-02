@@ -47,9 +47,14 @@ static float font_colour[4] = {1.f, 1.f, 1.f, 1.f};
 #include "hb.h"
 #include "hb-ft.h"
 #include "ft2build.h"
+#if defined(FT_MULTIPLE_MASTERS_H)
+#include FT_MULTIPLE_MASTERS_H
+#endif
+#include FT_GLYPH_H
 #include <unordered_map>
 #include <memory>
 #include <limits>
+#include <climits>
 
 #if defined(HB_VERSION_ATLEAST) && HB_VERSION_ATLEAST(1,0,5)
 //	#define WZ_FT_LOAD_FLAGS (FT_LOAD_DEFAULT | FT_LOAD_TARGET_LCD) // Needs further testing on low-DPI displays
@@ -61,6 +66,13 @@ static float font_colour[4] = {1.f, 1.f, 1.f, 1.f};
 	#define WZ_FT_LOAD_FLAGS FT_LOAD_NO_HINTING
 #endif
 #define WZ_FT_RENDER_MODE FT_RENDER_MODE_LCD
+
+#if defined(WZ_FRIBIDI_ENABLED)
+# include "fribidi.h"
+# define USE_NEW_FRIBIDI_API (FRIBIDI_MAJOR_VERSION >= 1)
+#endif // defined(WZ_FRIBIDI_ENABLED)
+
+#include "3rdparty/LRUCache11.hpp"
 
 float _horizScaleFactor = 1.0f;
 float _vertScaleFactor = 1.0f;
@@ -100,16 +112,47 @@ struct GlyphMetrics
 	int32_t bearing_y;
 };
 
+static std::unordered_map<std::string, std::shared_ptr<std::vector<char>>> m_loadedFontDataCache;
+
+static std::shared_ptr<std::vector<char>> loadFontData(const std::string &fileName)
+{
+	auto it = m_loadedFontDataCache.find(fileName);
+	if (it == m_loadedFontDataCache.end())
+	{
+		auto loadedFontDataPtr = std::make_shared<std::vector<char>>();
+		debug(LOG_WZ, "Loading font data: %s", fileName.c_str());
+		if (!loadFileToBufferVector(fileName.c_str(), *loadedFontDataPtr, true, false))
+		{
+			debug(LOG_WZ, "Failed to load font file: %s", fileName.c_str());
+			return nullptr;
+		}
+		auto result = m_loadedFontDataCache.insert({fileName, loadedFontDataPtr});
+		it = result.first;
+	}
+	return it->second;
+}
+
+static void clearFontDataCache()
+{
+	m_loadedFontDataCache.clear();
+}
+
 struct FTFace
 {
-	FTFace(FT_Library &lib, const std::string &fileName, int32_t charSize, uint32_t horizDPI, uint32_t vertDPI)
+	FTFace(FT_Library &lib, const std::string &fileName, int32_t charSize, uint32_t horizDPI, uint32_t vertDPI, optional<uint16_t> fontWeight = nullopt)
 	{
-		UDWORD pFileSize = 0;
-		if (!loadFile(fileName.c_str(), &pFileData, &pFileSize))
+		pFileData = loadFontData(fileName);
+		if (!pFileData)
 		{
-			debug(LOG_FATAL, "Unknown font file format for %s", fileName.c_str());
+			debug(LOG_FATAL, "Failed to load font file: %s", fileName.c_str());
 		}
-		FT_Error error = FT_New_Memory_Face(lib, (const FT_Byte*)pFileData, pFileSize, 0, &m_face);
+#if SIZE_MAX > LONG_MAX
+		if (pFileData->size() > static_cast<size_t>(std::numeric_limits<FT_Long>::max()))
+		{
+			debug(LOG_FATAL, "Font file size (%zu) is too big: %s", pFileData->size(), fileName.c_str());
+		}
+#endif
+		FT_Error error = FT_New_Memory_Face(lib, (const FT_Byte*)pFileData->data(), static_cast<FT_Long>(pFileData->size()), 0, &m_face);
 		if (error == FT_Err_Unknown_File_Format)
 		{
 			debug(LOG_FATAL, "Unknown font file format for %s", fileName.c_str());
@@ -123,6 +166,66 @@ struct FTFace
 		{
 			debug(LOG_FATAL, "Could not set character size");
 		}
+#if defined(FT_HAS_MULTIPLE_MASTERS) && (FREETYPE_MAJOR > 2 || (FREETYPE_MAJOR == 2 && (FREETYPE_MINOR >= 7))) // FreeType 2.7+ needed for FT_Get_Var_Design_Coordinates
+		if (fontWeight.has_value() && FT_HAS_MULTIPLE_MASTERS(m_face))
+		{
+			FT_MM_Var *amaster;
+			error = FT_Get_MM_Var(m_face, &amaster);
+			if (error == FT_Err_Ok)
+			{
+				// find the "weight"-tagged axis
+				optional<FT_UInt> weight_axis_idx;
+				auto widthTag = FT_MAKE_TAG('w','g','h','t');
+				for (FT_UInt i = 0; i < amaster->num_axis; ++i)
+				{
+					if (amaster->axis[i].tag == widthTag && !weight_axis_idx.has_value())
+					{
+						weight_axis_idx = i;
+					}
+				}
+				if (weight_axis_idx.has_value())
+				{
+					std::vector<FT_Fixed> variations(amaster->num_axis, 0);
+					error = FT_Get_Var_Design_Coordinates(m_face, amaster->num_axis, variations.data());
+					if (error == FT_Err_Ok)
+					{
+						// set the desired font weight
+						variations[weight_axis_idx.value()] = static_cast<FT_Fixed>(fontWeight.value()) << 16;
+						error = FT_Set_Var_Design_Coordinates(m_face, amaster->num_axis, variations.data());
+						if (error != FT_Err_Ok)
+						{
+							debug(LOG_WZ, "Failed to set the font weight axis (%d): %s", (int)error, fileName.c_str());
+						}
+					}
+					else
+					{
+						debug(LOG_WZ, "FT_Get_Var_Design_Coordinates failed (%d): %s", (int)error, fileName.c_str());
+					}
+				}
+				else
+				{
+					debug(LOG_WZ, "Font has multiple masters, but unable to find 'weight' axis: %s", fileName.c_str());
+				}
+
+#if (FREETYPE_MAJOR > 2 || (FREETYPE_MAJOR == 2 && (FREETYPE_MINOR >= 9)))
+				FT_Done_MM_Var(lib, amaster);
+#else
+				// FreeType < 2.9 lacks FT_Done_MM_Var - docs say to call `free` on the data structure
+				free(amaster);
+#endif
+				amaster = nullptr;
+			}
+			else
+			{
+				debug(LOG_WZ, "Font claims to have multiple masters, but FT_Get_MM_Var failed (%d): %s", (int)error, fileName.c_str());
+			}
+		}
+#else
+		if (fontWeight.has_value())
+		{
+			debug(LOG_WARNING, "FreeType does not appear to have multiple masters support - using font weight axis modifications will fail. Try upgrading FreeType");
+		}
+#endif
 		m_font = hb_ft_font_create(m_face, nullptr);
 #if defined(HB_VERSION_ATLEAST) && HB_VERSION_ATLEAST(1,0,5)
 		hb_ft_font_set_load_flags(m_font, WZ_FT_LOAD_FLAGS);
@@ -133,10 +236,6 @@ struct FTFace
 	{
 		hb_font_destroy(m_font);
 		FT_Done_Face(m_face);
-		if (pFileData != nullptr)
-		{
-			free(pFileData);
-		}
 	}
 
 	uint32_t getGlyphWidth(uint32_t codePoint)
@@ -149,61 +248,19 @@ struct FTFace
 		return m_face->glyph->metrics.width;
 	}
 
-	RasterizedGlyph get(uint32_t codePoint, Vector2i subpixeloffset64)
+	FT_Glyph getGlyph(uint32_t codePoint)
 	{
-		FT_Vector delta;
-		delta.x = subpixeloffset64.x;
-		delta.y = subpixeloffset64.y;
-		FT_Set_Transform(m_face, nullptr, &delta);
 		FT_Error error = FT_Load_Glyph(m_face,
 			codePoint, // the glyph_index in the font file
 			WZ_FT_LOAD_FLAGS
 		);
-		ASSERT(error == FT_Err_Ok, "Unable to load glyph %u", codePoint);
+		ASSERT_OR_RETURN(nullptr, error == FT_Err_Ok, "Unable to load glyph %u", codePoint);
 
-		FT_GlyphSlot slot = m_face->glyph;
-		FT_Render_Glyph(m_face->glyph, WZ_FT_RENDER_MODE);
-		FT_Bitmap ftBitmap = slot->bitmap;
+		FT_Glyph result;
+		error = FT_Get_Glyph(m_face->glyph, &result);
+		ASSERT_OR_RETURN(nullptr, error == FT_Err_Ok, "Unable to get glyph %u from slot", codePoint);
 
-		RasterizedGlyph g;
-		g.buffer.reset(new unsigned char[ftBitmap.pitch * ftBitmap.rows]);
-		if (ftBitmap.buffer != nullptr)
-		{
-			memcpy(g.buffer.get(), ftBitmap.buffer, ftBitmap.pitch * ftBitmap.rows);
-		}
-		else
-		{
-			ASSERT(ftBitmap.pitch == 0 || ftBitmap.rows == 0, "Glyph buffer missing (%d and %d)", ftBitmap.pitch, ftBitmap.rows);
-		}
-		g.width = ftBitmap.width / 3;
-		g.height = ftBitmap.rows;
-		g.bearing_x = slot->bitmap_left;
-		g.bearing_y = slot->bitmap_top;
-		g.pitch = ftBitmap.pitch;
-		return g;
-	}
-
-	GlyphMetrics getGlyphMetrics(uint32_t codePoint, Vector2i subpixeloffset64)
-	{
-		FT_Vector delta;
-		delta.x = subpixeloffset64.x;
-		delta.y = subpixeloffset64.y;
-		FT_Set_Transform(m_face, nullptr, &delta);
-		FT_Error error = FT_Load_Glyph(m_face,
-		                               codePoint, // the glyph_index in the font file
-		                               WZ_FT_LOAD_FLAGS
-		);
-		if (error != FT_Err_Ok)
-		{
-			debug(LOG_FATAL, "unable to load glyph");
-		}
-
-		FT_GlyphSlot slot = m_face->glyph;
-		return {
-			static_cast<uint32_t>(slot->metrics.width),
-			static_cast<uint32_t>(slot->metrics.height),
-			slot->bitmap_left, slot->bitmap_top
-		};
+		return result;
 	}
 
 	operator FT_Face()
@@ -214,11 +271,13 @@ struct FTFace
 	FT_Face &face() { return m_face; }
 
 	hb_font_t *m_font;
-	char *pFileData = nullptr;
+	std::shared_ptr<std::vector<char>> pFileData;
 
 private:
 	FT_Face m_face;
 };
+
+static FTFace &getFTFace(iV_fonts FontID, hb_script_t script); // forward-declare
 
 struct FTlib
 {
@@ -235,15 +294,244 @@ struct FTlib
 	FT_Library lib;
 };
 
+struct FTGlyphCacheKey
+{
+	FTFace* face;
+	uint32_t codepoint;
+
+	FTGlyphCacheKey(FTFace& face, uint32_t codepoint)
+	: face(&face), codepoint(codepoint)
+	{ }
+
+	bool operator==(const FTGlyphCacheKey& other) const
+	{
+		return face == other.face && codepoint == other.codepoint;
+	}
+};
+
+namespace std {
+
+	template <>
+	struct hash<FTGlyphCacheKey>
+	{
+		std::size_t operator()(const FTGlyphCacheKey& k) const
+		{
+			return std::hash<FTFace*>()(k.face)
+				 ^ (std::hash<int>()(k.codepoint) << 1);
+		}
+	};
+
+}
+
+struct FTCache
+{
+	FTCache()
+	: m_glyphCache(256, 16)
+	{ }
+
+	RasterizedGlyph get(FTFace& face, uint32_t codePoint, Vector2i subpixeloffset64)
+	{
+		FT_Glyph glyph = getGlyph(face, codePoint);
+		ASSERT_OR_RETURN({}, glyph != nullptr, "Failed to get glyph: %" PRIu32, codePoint);
+
+		FT_Vector delta;
+		delta.x = subpixeloffset64.x;
+		delta.y = subpixeloffset64.y;
+
+		FT_Error error = FT_Glyph_To_Bitmap(&glyph, WZ_FT_RENDER_MODE, &delta, 0);
+		ASSERT_OR_RETURN({}, error == FT_Err_Ok, "Failed to render glyph: %" PRIu32, codePoint);
+		// After this point, glyph is actually a new FT_BitmapGlyph (which must be released when done)
+
+		FT_BitmapGlyph glyph_bitmap = (FT_BitmapGlyph)glyph;
+		FT_Bitmap ftBitmap = glyph_bitmap->bitmap;
+
+		RasterizedGlyph g;
+		g.buffer.reset(new unsigned char[ftBitmap.pitch * ftBitmap.rows]);
+		if (ftBitmap.buffer != nullptr)
+		{
+			memcpy(g.buffer.get(), ftBitmap.buffer, ftBitmap.pitch * ftBitmap.rows);
+		}
+		else
+		{
+			ASSERT(ftBitmap.pitch == 0 || ftBitmap.rows == 0, "Glyph buffer missing (%d and %d)", ftBitmap.pitch, ftBitmap.rows);
+		}
+		g.width = ftBitmap.width / 3;
+		g.height = ftBitmap.rows;
+		g.bearing_x = glyph_bitmap->left;
+		g.bearing_y = glyph_bitmap->top;
+		g.pitch = ftBitmap.pitch;
+
+		FT_Done_Glyph(glyph);
+		return g;
+	}
+
+	GlyphMetrics getGlyphMetrics(FTFace& face, uint32_t codePoint, Vector2i subpixeloffset64)
+	{
+		FT_Glyph glyph = getGlyph(face, codePoint);
+		ASSERT_OR_RETURN({}, glyph != nullptr, "Failed to get glyph: %" PRIu32, codePoint);
+
+		FT_Vector delta;
+		delta.x = subpixeloffset64.x;
+		delta.y = subpixeloffset64.y;
+
+		// FUTURE FIXME: Surely there is a better way of getting the metrics we need? ....
+		FT_Error error = FT_Glyph_To_Bitmap(&glyph, WZ_FT_RENDER_MODE, &delta, 0);
+		ASSERT_OR_RETURN({}, error == FT_Err_Ok, "Failed to render glyph: %" PRIu32, codePoint);
+		// After this point, glyph is actually a new FT_BitmapGlyph (which must be released when done)
+
+		FT_BitmapGlyph glyph_bitmap = (FT_BitmapGlyph)glyph;
+		FT_Bitmap ftBitmap = glyph_bitmap->bitmap;
+
+		GlyphMetrics result {
+			ftBitmap.width / 3,
+			ftBitmap.rows,
+			glyph_bitmap->left, glyph_bitmap->top
+		};
+
+		FT_Done_Glyph(glyph);
+
+		return result;
+	}
+
+public:
+	void clear()
+	{
+		m_glyphCache.clear();
+	}
+
+private:
+	// The glyph is owned by the cache - if transforms are needed, the caller should use FT_Glyph_Copy to make a copy and modify the copy!
+	FT_Glyph getGlyph(FTFace& face, uint32_t codepoint)
+	{
+		FT_Glyph glyph = nullptr;
+		WZOwnedFTGlyph *pCachedGlyph = m_glyphCache.tryGetPt(FTGlyphCacheKey(face, codepoint));
+		if (pCachedGlyph)
+		{
+			glyph = pCachedGlyph->glyph;
+		}
+		if (!glyph)
+		{
+			// not cached - load fresh
+			glyph = face.getGlyph(codepoint);
+			if (glyph)
+			{
+				// cache it
+				m_glyphCache.insert(FTGlyphCacheKey(face, codepoint), WZOwnedFTGlyph(glyph));
+			}
+		}
+		return glyph;
+	}
+
+private:
+	struct WZOwnedFTGlyph
+	{
+		WZOwnedFTGlyph(FT_Glyph glyph)
+		: glyph(glyph)
+		{ }
+		~WZOwnedFTGlyph() { if (glyph) { FT_Done_Glyph(glyph); } }
+
+		// Prevent copies
+		WZOwnedFTGlyph(const WZOwnedFTGlyph&) = delete;
+		void operator=(const WZOwnedFTGlyph&) = delete;
+
+		// Allow move semantics
+		WZOwnedFTGlyph& operator=(WZOwnedFTGlyph&& other)
+		{
+			if (this != &other)
+			{
+				glyph = other.glyph;
+
+				// Reset other
+				other.glyph = nullptr;
+			}
+			return *this;
+		}
+
+		WZOwnedFTGlyph(WZOwnedFTGlyph&& other)
+		{
+			*this = std::move(other);
+		}
+
+	public:
+		FT_Glyph glyph;
+	};
+
+	lru11::Cache<FTGlyphCacheKey, WZOwnedFTGlyph> m_glyphCache;
+};
+
+static FTCache glyphCache;
+
 struct TextRun
 {
-	std::string text;
-	std::string language;
+	int startOffset;
+	int endOffset;
 	hb_script_t script;
 	hb_direction_t direction;
+	hb_language_t language;
+	FTFace* fontFace;
 
-	TextRun(const std::string &t, const std::string &l, hb_script_t s, hb_direction_t d) :
-		text(t), language(l), script(s), direction(d) {}
+	hb_buffer_t* buffer = nullptr; // owned
+	unsigned int glyphCount;
+	hb_glyph_info_t* glyphInfos = nullptr;
+	hb_glyph_position_t* glyphPositions = nullptr;
+	const uint32_t* codePoints = nullptr;
+
+public:
+
+	TextRun(const uint32_t* codePoints, int startOffset, int endOffset, hb_script_t script, hb_direction_t direction, hb_language_t language, FTFace& face)
+	: startOffset(startOffset), endOffset(endOffset), script(script), direction(direction), language(language), fontFace(&face), codePoints(codePoints)
+	{ }
+
+	~TextRun()
+	{
+		if (buffer)
+		{
+			hb_buffer_destroy(buffer);
+		}
+	}
+
+public:
+	// Prevent copies
+	TextRun(const TextRun&) = delete;
+	void operator=(const TextRun&) = delete;
+
+	// Allow move semantics
+	TextRun& operator=(TextRun&& other)
+	{
+		if (this != &other)
+		{
+			// Free the existing (owned) buffer, if any
+			if (buffer)
+			{
+				hb_buffer_destroy(buffer);
+			}
+
+			// Get the other data
+			startOffset = other.startOffset;
+			endOffset = other.endOffset;
+			script = other.script;
+			direction = other.direction;
+			language = other.language;
+			fontFace = other.fontFace;
+
+			buffer = other.buffer; // owned
+			glyphCount = other.glyphCount;
+			glyphInfos = other.glyphInfos;
+			glyphPositions = other.glyphPositions;
+			codePoints = other.codePoints;
+
+			// Reset other's pointer types
+			other.buffer = nullptr;
+			other.glyphInfos = nullptr;
+			other.glyphPositions = nullptr;
+		}
+		return *this;
+	}
+
+	TextRun(TextRun&& other)
+	{
+		*this = std::move(other);
+	}
 };
 
 struct TextLayoutMetrics
@@ -289,20 +577,33 @@ struct DrawTextResult
 // only minimal visual difference.
 struct TextShaper
 {
-	TextShaper()
+	struct HarfbuzzPosition
 	{
-		m_buffer = hb_buffer_create();
-	}
+		hb_codepoint_t codepoint;
+		Vector2i penPosition;
+		FTFace& face;
+
+		HarfbuzzPosition(hb_codepoint_t c, Vector2i &&p, FTFace& f) : codepoint(c), penPosition(p), face(f) {}
+	};
+
+	struct ShapingResult
+	{
+		std::vector<HarfbuzzPosition> glyphes;
+		int32_t x_advance = 0;
+		int32_t y_advance = 0;
+	};
+
+	TextShaper()
+	{ }
 
 	~TextShaper()
-	{
-		hb_buffer_destroy(m_buffer);
-	}
+	{ }
 
 	// Returns the text width and height *IN PIXELS*
-	TextLayoutMetrics getTextMetrics(const TextRun& text, FTFace &face)
+	TextLayoutMetrics getTextMetrics(const WzString& text, iV_fonts fontID)
 	{
-		const ShapingResult &shapingResult = shapeText(text, face);
+		const ShapingResult& shapingResult = shapeText(text, fontID);
+
 		if (shapingResult.glyphes.empty())
 		{
 			return TextLayoutMetrics(shapingResult.x_advance / 64, shapingResult.y_advance / 64);
@@ -314,8 +615,8 @@ struct TextShaper
 		int32_t max_y;
 
 		std::tie(min_x, max_x, min_y, max_y) = std::accumulate(shapingResult.glyphes.begin(), shapingResult.glyphes.end(), std::make_tuple(1000, -1000, 1000, -1000),
-			[&face] (const std::tuple<int32_t, int32_t, int32_t, int32_t> &bounds, const HarfbuzzPosition &g) {
-			RasterizedGlyph glyph = face.get(g.codepoint, g.penPosition % 64);
+			[] (const std::tuple<int32_t, int32_t, int32_t, int32_t> &bounds, const HarfbuzzPosition &g) {
+			GlyphMetrics glyph = glyphCache.getGlyphMetrics(g.face, g.codepoint, g.penPosition % 64);
 			int32_t x0 = g.penPosition.x / 64 + glyph.bearing_x;
 			int32_t y0 = g.penPosition.y / 64 - glyph.bearing_y;
 			return std::make_tuple(
@@ -335,10 +636,27 @@ struct TextShaper
 		return TextLayoutMetrics(std::max(texture_width, x_advance), std::max(texture_height, y_advance));
 	}
 
-	// Draws the text and returns the text buffer, width and height, etc *IN PIXELS*
-	DrawTextResult drawText(const TextRun& text, FTFace &face)
+#if defined(WZ_FRIBIDI_ENABLED)
+	FriBidiParType getBaseDirection()
 	{
-		const ShapingResult &shapingResult = shapeText(text, face);
+		std::string language = getLanguage();
+
+		if (language == "ar_SA")
+		{
+			return HB_DIRECTION_RTL;
+		}
+		else
+		{
+			return HB_DIRECTION_LTR;
+		}
+	}
+#endif
+
+	// Draws the text and returns the text buffer, width and height, etc *IN PIXELS*
+	DrawTextResult drawText(const WzString& text, iV_fonts fontID)
+	{
+		ShapingResult shapingResult = shapeText(text, fontID);
+
 		if (shapingResult.glyphes.empty())
 		{
 			return DrawTextResult(RenderedText(), TextLayoutMetrics(shapingResult.x_advance / 64, shapingResult.y_advance / 64));
@@ -364,7 +682,7 @@ struct TextShaper
 		std::vector<glyphRaster> glyphs;
 		std::transform(shapingResult.glyphes.begin(), shapingResult.glyphes.end(), std::back_inserter(glyphs),
 			[&] (const HarfbuzzPosition &g) {
-			RasterizedGlyph glyph = face.get(g.codepoint, g.penPosition % 64);
+			RasterizedGlyph glyph = glyphCache.get(g.face, g.codepoint, g.penPosition % 64);
 			int32_t x0 = g.penPosition.x / 64 + glyph.bearing_x;
 			int32_t y0 = g.penPosition.y / 64 - glyph.bearing_y;
 			min_x = std::min(x0, min_x);
@@ -379,87 +697,245 @@ struct TextShaper
 		const uint32_t x_advance = (shapingResult.x_advance / 64);
 		const uint32_t y_advance = (shapingResult.y_advance / 64);
 
-		std::unique_ptr<unsigned char[]> stringTexture(new unsigned char[4 * texture_width * texture_height]);
-		memset(stringTexture.get(), 0, 4 * texture_width * texture_height);
+		const size_t stringTextureSize = 4 * texture_width * texture_height;
 
+		std::unique_ptr<unsigned char[]> stringTexture(new unsigned char[stringTextureSize]);
+		memset(stringTexture.get(), 0, stringTextureSize);
+
+		// TODO: Someone should document this piece.
+		size_t glyphNum = 0;
 		std::for_each(glyphs.begin(), glyphs.end(),
 			[&](const glyphRaster &g)
 			{
+				const auto glyphBufferSize = g.pitch * g.size.y;
 				for (int i = 0; i < g.size.y; ++i)
 				{
 					uint32_t i0 = g.pixelPosition.y - min_y;
 					for (int j = 0; j < g.size.x; ++j)
 					{
 						uint32_t j0 = g.pixelPosition.x - min_x;
-						uint8_t const *src = &g.buffer[i * g.pitch + 3 * j];
-						uint8_t *dst = &stringTexture[4 * ((i0 + i) * texture_width + j + j0)];
+						const auto srcBufferPos = i * g.pitch + 3 * j;
+						ASSERT(srcBufferPos + 2 < glyphBufferSize, "Invalid source (%" PRIu32" / %" PRIu32") reading glyph %zu for string \"%s\"; (%d, %d, %d, %d, %" PRIu32 ", %d, %d, %d, %" PRIu32 ", %" PRIu32 ")", srcBufferPos, glyphBufferSize, glyphNum, text.toUtf8().c_str(), i, g.size.y, g.pixelPosition.y, min_y, i0, j, g.pixelPosition.x, min_x, j0, g.pitch);
+						uint8_t const *src = &g.buffer[srcBufferPos];
+						const auto stringTexturePos = 4 * ((i0 + i) * texture_width + j + j0);
+						ASSERT(stringTexturePos + 3 < stringTextureSize, "Invalid destination (%" PRIu32" / %zu) writing glyph %zu for string \"%s\"; (%d, %d, %d, %d, %" PRIu32 ", %d, %d, %d, %" PRIu32 ", %" PRIu32 ")", stringTexturePos, stringTextureSize, glyphNum, text.toUtf8().c_str(), i, g.size.y, g.pixelPosition.y, min_y, i0, j, g.pixelPosition.x, min_x, j0, texture_width);
+						uint8_t *dst = &stringTexture[stringTexturePos];
 						dst[0] = std::min(dst[0] + src[0], 255);
 						dst[1] = std::min(dst[1] + src[1], 255);
 						dst[2] = std::min(dst[2] + src[2], 255);
 						dst[3] = std::min(dst[3] + ((src[0] * 77 + src[1] * 150 + src[2] * 29) >> 8), 255);
 					}
 				}
+				++glyphNum;
 			});
+
 		return DrawTextResult(
 				RenderedText(std::move(stringTexture), texture_width, texture_height, min_x, min_y),
 				TextLayoutMetrics(std::max(texture_width, x_advance), std::max(texture_height, y_advance))
 		);
 	}
 
-public:
-	hb_buffer_t* m_buffer;
-
-	struct HarfbuzzPosition
+	ShapingResult shapeText(const WzString& text, iV_fonts fontID)
 	{
-		hb_codepoint_t codepoint;
-		Vector2i penPosition;
-
-		HarfbuzzPosition(hb_codepoint_t c, Vector2i &&p) : codepoint(c), penPosition(p) {}
-	};
-
-	struct ShapingResult
-	{
-		std::vector<HarfbuzzPosition> glyphes;
-		int32_t x_advance = 0;
-		int32_t y_advance = 0;
-	};
-
-	ShapingResult shapeText(const TextRun& text, FTFace &face)
-	{
-		hb_buffer_reset(m_buffer);
-		size_t length = std::min(text.text.size(), static_cast<size_t>(std::numeric_limits<int>::max()));
-		int textLength = static_cast<int>(length);
-
-		hb_buffer_add_utf8(m_buffer, text.text.c_str(), textLength, 0, textLength);
-		hb_buffer_guess_segment_properties(m_buffer);
-		hb_buffer_set_flags(m_buffer, (hb_buffer_flags_t)(HB_BUFFER_FLAG_BOT | HB_BUFFER_FLAG_EOT));
-
-		// harfbuzz shaping
-		std::array<hb_feature_t, 3> features = { {HBFeature::KerningOn, HBFeature::LigatureOn, HBFeature::CligOn} };
-		hb_shape(face.m_font, m_buffer, features.data(), static_cast<unsigned int>(features.size()));
-
-		unsigned int glyphCount;
-		hb_glyph_info_t *glyphInfo = hb_buffer_get_glyph_infos(m_buffer, &glyphCount);
-		hb_glyph_position_t *glyphPos = hb_buffer_get_glyph_positions(m_buffer, &glyphCount);
-		if (glyphCount == 0)
+		/* Fribidi assumes that the text is encoded in UTF-32, so we have to
+		   convert from UTF-8 to UTF-32, assuming that the string is indeed in UTF-8.*/
+		std::vector<uint32_t> codePoints = text.toUtf32();
+		if (codePoints.empty())
 		{
-			return {};
+			return ShapingResult();
+		}
+		int codePoints_size = static_cast<int>(codePoints.size());
+#if SIZE_MAX > INT32_MAX
+		if (codePoints.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+		{
+			ASSERT(codePoints.size() <= static_cast<size_t>(std::numeric_limits<int>::max()), "text codePoints.size (%zu) exceeds int_max!", codePoints.size());
+			codePoints_size = std::numeric_limits<int>::max(); // truncate
+		}
+#endif
+
+		std::vector<hb_script_t> scripts(codePoints_size);
+
+#if defined(WZ_FRIBIDI_ENABLED)
+		// Step 1: Initialize fribidi variables.
+
+		FriBidiParType baseDirection = getBaseDirection();
+		FriBidiStrIndex size = static_cast<FriBidiStrIndex>(codePoints_size);
+		std::vector<FriBidiCharType> types(size, static_cast<FriBidiCharType>(0));
+		std::vector<FriBidiLevel> levels(size, static_cast<FriBidiLevel>(0));
+# if USE_NEW_FRIBIDI_API
+		std::vector<FriBidiBracketType> bracketedTypes(size, static_cast<FriBidiBracketType>(0));
+# endif // USE_NEW_FRIBIDI_API
+
+#else // !defined(WZ_FRIBIDI_ENABLED)
+
+		std::vector<bool> levels(codePoints_size, 0);
+
+#endif // defined(WZ_FRIBIDI_ENABLED)
+
+
+
+#if defined(WZ_FRIBIDI_ENABLED)
+		// Step 2: Run fribidi.
+
+		/* Get the bidi type of each character in the string.*/
+		fribidi_get_bidi_types(codePoints.data(), size, types.data());
+
+# if USE_NEW_FRIBIDI_API
+		fribidi_get_bracket_types(codePoints.data(), size, types.data(), bracketedTypes.data());
+
+		FriBidiLevel maxLevel = fribidi_get_par_embedding_levels_ex(types.data(), bracketedTypes.data(), size, &baseDirection, levels.data());
+		ASSERT(maxLevel != 0, "Error in fribidi_get_par_embedding_levels_ex!");
+# else
+		FriBidiLevel maxLevel = fribidi_get_par_embedding_levels(types.data(), size, &baseDirection, levels.data());
+		ASSERT(maxLevel != 0, "Error in fribidi_get_par_embedding_levels_ex!");
+# endif // USE_NEW_FRIBIDI_API
+
+#endif // defined(WZ_FRIBIDI_ENABLED)
+		
+		/* Fill the array of scripts with scripts of each character */
+		hb_unicode_funcs_t* funcs = hb_unicode_funcs_get_default();
+		for (int i = 0; i < codePoints_size; ++i)
+			scripts[i] = hb_unicode_script(funcs, codePoints[i]);
+
+
+		// Step 3: Resolve common or inherited scripts.
+
+		hb_script_t lastScriptValue = HB_SCRIPT_UNKNOWN;
+		int lastScriptIndex = -1;
+		int lastSetIndex = -1;
+
+		for (int i = 0; i < codePoints_size; ++i)
+		{
+			if (scripts[i] == HB_SCRIPT_COMMON || scripts[i] == HB_SCRIPT_INHERITED)
+			{
+				if (lastScriptIndex != -1)
+				{
+					scripts[i] = lastScriptValue;
+					lastSetIndex = i;
+				}
+			}
+			else
+			{
+				for (int j = lastSetIndex + 1; j < i; ++j)
+				{
+					scripts[j] = scripts[i];
+				}
+				lastScriptValue = scripts[i];
+				lastScriptIndex = i;
+				lastSetIndex = i;
+			}
+		}
+
+
+		// Step 4: Create the different runs
+
+		hb_language_t language = hb_language_get_default(); // Future TODO: We could probably be smarter about this, but this replicates the behavior of hb_buffer_guess_segment_properties()
+
+		std::vector<TextRun> textRuns;
+		hb_script_t lastScript = scripts[0];
+		auto lastLevel = levels[0];
+		int lastRunStart = 0; // where the last run started
+
+		/* i == size means that we've reached the end of the string,
+		   and that the last run should be created.*/
+		for (int i = 0; i <= codePoints_size; ++i)
+		{
+			/* If the script or level is of the current point is the same as the previous one,
+			   then this means that the we have not reached the end of the current run.
+			   If there's change, create a new run.*/
+			if (i == codePoints_size || (scripts[i] != lastScript) || (levels[i] != lastLevel))
+			{
+				int startOffset = lastRunStart;
+				int endOffset = i;
+				hb_script_t script = lastScript;
+
+#if defined(WZ_FRIBIDI_ENABLED)
+				/* "lastLevel & 1" yields either 1 or 0, depending on the least significant bit of lastLevel.*/
+				hb_direction_t direction = lastLevel & 1 ? HB_DIRECTION_RTL : HB_DIRECTION_LTR;
+#else // !defined(WZ_FRIBIDI_ENABLED)
+				hb_direction_t direction = hb_script_get_horizontal_direction(script);
+#endif // defined(WZ_FRIBIDI_ENABLED)
+
+				FTFace& face = getFTFace(fontID, script);
+
+				textRuns.emplace_back(codePoints.data(), startOffset, endOffset, script, direction, language, face);
+
+				if (i < codePoints_size)
+				{
+					lastScript = scripts[i];
+					lastLevel = levels[i];
+					lastRunStart = i;
+				}
+				else
+				{
+					break;
+				}
+			}
+		}
+
+
+		// Step 6: Shape each run using harfbuzz.
+
+		ShapingResult shapingResult;
+
+		for (int i = 0; i < textRuns.size(); ++i)
+		{
+			shapeHarfbuzz(textRuns[i], *textRuns[i].fontFace);
 		}
 
 		int32_t x = 0;
 		int32_t y = 0;
-		ShapingResult result;
-		for (unsigned int glyphIndex = 0; glyphIndex < glyphCount; ++glyphIndex)
-		{
-			hb_glyph_position_t &current_glyphPos = glyphPos[glyphIndex];
-			result.glyphes.emplace_back(glyphInfo[glyphIndex].codepoint, Vector2i(x + current_glyphPos.x_offset, y + current_glyphPos.y_offset));
 
-			x += glyphPos[glyphIndex].x_advance;
-			y += glyphPos[glyphIndex].y_advance;
+		auto processTextRunGlyphs = [&](const TextRun& run) {
+			for (unsigned int glyphIndex = 0; glyphIndex < run.glyphCount; ++glyphIndex)
+			{
+				hb_glyph_position_t& current_glyphPos = run.glyphPositions[glyphIndex];
+
+				shapingResult.glyphes.emplace_back(run.glyphInfos[glyphIndex].codepoint, Vector2i(x + current_glyphPos.x_offset, y + current_glyphPos.y_offset), *run.fontFace);
+
+				x += run.glyphPositions[glyphIndex].x_advance;
+				y += run.glyphPositions[glyphIndex].y_advance;
+			}
 		};
-		result.x_advance = x;
-		result.y_advance = y;
-		return result;
+
+#if defined(WZ_FRIBIDI_ENABLED)
+		// The direction of the loop must change depending on the base direction
+		if (!(FRIBIDI_IS_RTL(baseDirection)))
+		{
+#endif // defined(WZ_FRIBIDI_ENABLED)
+			std::for_each(textRuns.cbegin(), textRuns.cend(), processTextRunGlyphs);
+#if defined(WZ_FRIBIDI_ENABLED)
+		}
+		else
+		{
+			std::for_each(textRuns.crbegin(), textRuns.crend(), processTextRunGlyphs);
+		}
+#endif // defined(WZ_FRIBIDI_ENABLED)
+
+		shapingResult.x_advance += x;
+		shapingResult.y_advance += y;
+
+		// Step 7: Finalize.
+
+		return shapingResult;
+	}
+
+	inline void shapeHarfbuzz(TextRun& run, FTFace& face)
+	{
+		run.buffer = hb_buffer_create();
+		hb_buffer_set_direction(run.buffer, run.direction);
+		hb_buffer_set_script(run.buffer, run.script);
+		hb_buffer_set_language(run.buffer, run.language);
+		hb_buffer_add_utf32(run.buffer, run.codePoints + run.startOffset,
+                            run.endOffset - run.startOffset, 0,
+                            run.endOffset - run.startOffset);
+		hb_buffer_set_flags(run.buffer, (hb_buffer_flags_t)(HB_BUFFER_FLAG_BOT | HB_BUFFER_FLAG_EOT));
+		std::array<hb_feature_t, 3> features = { {HBFeature::KerningOn, HBFeature::LigatureOn, HBFeature::CligOn} };
+        
+		hb_shape(face.m_font, run.buffer, features.data(), static_cast<unsigned int>(features.size()));
+
+		run.glyphInfos = hb_buffer_get_glyph_infos(run.buffer, &run.glyphCount);
+		run.glyphPositions = hb_buffer_get_glyph_positions(run.buffer, &run.glyphCount);
 	}
 };
 
@@ -499,12 +975,20 @@ inline float iV_GetVertScaleFactor()
 // Do not change this, or various layout in the game interface & menus will break.
 #define DEFAULT_DPI 72.0f
 
-static FTFace *regular = nullptr;
-static FTFace *regularBold = nullptr;
-static FTFace *bold = nullptr;
-static FTFace *medium = nullptr;
-static FTFace *small = nullptr;
-static FTFace *smallBold = nullptr;
+static hb_unicode_funcs_t* m_unicode_funcs_hb = nullptr;
+
+struct WZFontCollection
+{
+public:
+	std::unique_ptr<FTFace> regular;
+	std::unique_ptr<FTFace> regularBold;
+	std::unique_ptr<FTFace> bold;
+	std::unique_ptr<FTFace> medium;
+	std::unique_ptr<FTFace> small;
+	std::unique_ptr<FTFace> smallBold;
+};
+static WZFontCollection baseFonts;
+static std::unique_ptr<WZFontCollection> cjkFonts;
 
 struct iVFontsHash
 {
@@ -516,23 +1000,67 @@ struct iVFontsHash
 typedef std::unordered_map<iV_fonts, WzText, iVFontsHash> FontToEllipsisMapType;
 static FontToEllipsisMapType fontToEllipsisMap;
 
-static FTFace &getFTFace(iV_fonts FontID)
+#define CJK_FONT_PATH "fonts/NotoSansCJK-VF.otf.ttc"
+
+static void inline initializeCJKFontsIfNeeded()
 {
+	if (cjkFonts) { return; }
+	cjkFonts = std::unique_ptr<WZFontCollection>(new WZFontCollection());
+	uint32_t horizDPI = static_cast<uint32_t>(DEFAULT_DPI * _horizScaleFactor);
+	uint32_t vertDPI = static_cast<uint32_t>(DEFAULT_DPI * _vertScaleFactor);
+	cjkFonts->regular = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, CJK_FONT_PATH, 12 * 64, horizDPI, vertDPI, 400));
+	cjkFonts->regularBold = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, CJK_FONT_PATH, 12 * 64, horizDPI, vertDPI, 700));
+	cjkFonts->bold = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, CJK_FONT_PATH, 21 * 64, horizDPI, vertDPI, 400));
+	cjkFonts->medium = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, CJK_FONT_PATH, 16 * 64, horizDPI, vertDPI, 400));
+	cjkFonts->small = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, CJK_FONT_PATH, 9 * 64, horizDPI, vertDPI, 400));
+	cjkFonts->smallBold = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, CJK_FONT_PATH, 9 * 64, horizDPI, vertDPI, 700));
+}
+
+static FTFace &getFTFace(iV_fonts FontID, hb_script_t script)
+{
+	switch (script)
+	{
+		case HB_SCRIPT_HAN:
+		case HB_SCRIPT_BOPOMOFO:
+		case HB_SCRIPT_HANGUL:
+		case HB_SCRIPT_HIRAGANA:
+		case HB_SCRIPT_KATAKANA:
+			initializeCJKFontsIfNeeded();
+			switch (FontID)
+			{
+			default:
+			case font_regular:
+				return *(cjkFonts->regular);
+			case font_regular_bold:
+				return *(cjkFonts->regularBold);
+			case font_large:
+				return *(cjkFonts->bold);
+			case font_medium:
+				return *(cjkFonts->medium);
+			case font_small:
+				return *(cjkFonts->small);
+			case font_bar:
+				return *(cjkFonts->smallBold);
+			}
+			break;
+		default:
+			break;
+	}
 	switch (FontID)
 	{
 	default:
 	case font_regular:
-		return *regular;
+		return *(baseFonts.regular);
 	case font_regular_bold:
-		return *regularBold;
+		return *(baseFonts.regularBold);
 	case font_large:
-		return *bold;
+		return *(baseFonts.bold);
 	case font_medium:
-		return *medium;
+		return *(baseFonts.medium);
 	case font_small:
-		return *small;
+		return *(baseFonts.small);
 	case font_bar:
-		return *smallBold;
+		return *(baseFonts.smallBold);
 	}
 }
 
@@ -550,30 +1078,35 @@ void iV_TextInit(float horizScaleFactor, float vertScaleFactor)
 	uint32_t vertDPI = static_cast<uint32_t>(DEFAULT_DPI * vertScaleFactor);
 	debug(LOG_WZ, "Text-Rendering Scaling Factor: %f x %f; Internal Font DPI: %" PRIu32 " x %" PRIu32 "", _horizScaleFactor, _vertScaleFactor, horizDPI, vertDPI);
 
-	regular = new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans.ttf", 12 * 64, horizDPI, vertDPI);
-	regularBold = new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans-Bold.ttf", 12 * 64, horizDPI, vertDPI);
-	bold = new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans-Bold.ttf", 21 * 64, horizDPI, vertDPI);
-	medium = new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans.ttf", 16 * 64, horizDPI, vertDPI);
-	small = new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans.ttf", 9 * 64, horizDPI, vertDPI);
-	smallBold = new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans-Bold.ttf", 9 * 64, horizDPI, vertDPI);
+	baseFonts.regular = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans.ttf", 12 * 64, horizDPI, vertDPI));
+	baseFonts.regularBold = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans-Bold.ttf", 12 * 64, horizDPI, vertDPI));
+	baseFonts.bold = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans-Bold.ttf", 21 * 64, horizDPI, vertDPI));
+	baseFonts.medium = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans.ttf", 16 * 64, horizDPI, vertDPI));
+	baseFonts.small = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans.ttf", 9 * 64, horizDPI, vertDPI));
+	baseFonts.smallBold = std::unique_ptr<FTFace>(new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans-Bold.ttf", 9 * 64, horizDPI, vertDPI));
+
+	// Do a sanity-check here to make sure the CJK font exists
+	// (since it's only loaded on-demand, and thus might fail with a fatal error later if missing)
+	if (PHYSFS_exists(CJK_FONT_PATH) == 0)
+	{
+		debug(LOG_FATAL, "Missing data file: %s", CJK_FONT_PATH);
+	}
+
+	m_unicode_funcs_hb = hb_unicode_funcs_get_default();
+
+	// hb_language_get_default: "To avoid problems, call this function once before multiple threads can call it."
+	hb_language_get_default();
 }
 
 void iV_TextShutdown()
 {
-	delete regular;
-	delete medium;
-	delete bold;
-	delete small;
-	delete smallBold;
-	small = nullptr;
-	regular = nullptr;
-	medium = nullptr;
-	bold = nullptr;
-	small = nullptr;
-	smallBold = nullptr;
+	glyphCache.clear();
+	baseFonts = WZFontCollection();
+	cjkFonts.reset();
 	delete textureID;
 	textureID = nullptr;
 	fontToEllipsisMap.clear();
+	clearFontDataCache();
 }
 
 void iV_TextUpdateScaleFactor(float horizScaleFactor, float vertScaleFactor)
@@ -613,10 +1146,9 @@ unsigned int height_pixelsToPoints(unsigned int heightInPixels)
 }
 
 // Returns the text width *in points*
-unsigned int iV_GetTextWidth(const char *string, iV_fonts fontID)
+unsigned int iV_GetTextWidth(const WzString& string, iV_fonts fontID)
 {
-	TextRun tr(string, "en", HB_SCRIPT_COMMON, HB_DIRECTION_LTR);
-	TextLayoutMetrics metrics = getShaper().getTextMetrics(tr, getFTFace(fontID));
+	TextLayoutMetrics metrics = getShaper().getTextMetrics(string, fontID);
 	return width_pixelsToPoints(metrics.width);
 }
 
@@ -627,17 +1159,16 @@ unsigned int iV_GetCountedTextWidth(const char *string, size_t string_length, iV
 }
 
 // Returns the text height *in points*
-unsigned int iV_GetTextHeight(const char *string, iV_fonts fontID)
+unsigned int iV_GetTextHeight(const char* string, iV_fonts fontID)
 {
-	TextRun tr(string, "en", HB_SCRIPT_COMMON, HB_DIRECTION_LTR);
-	TextLayoutMetrics metrics = getShaper().getTextMetrics(tr, getFTFace(fontID));
+	TextLayoutMetrics metrics = getShaper().getTextMetrics(string, fontID);
 	return height_pixelsToPoints(metrics.height);
 }
 
 // Returns the character width *in points*
 unsigned int iV_GetCharWidth(uint32_t charCode, iV_fonts fontID)
 {
-	return width_pixelsToPoints(getFTFace(fontID).getGlyphWidth(charCode) >> 6);
+	return width_pixelsToPoints(getFTFace(fontID, hb_unicode_script(m_unicode_funcs_hb, charCode)).getGlyphWidth(charCode) >> 6);
 }
 
 int metricsHeight_PixelsToPoints(int heightMetric)
@@ -648,19 +1179,19 @@ int metricsHeight_PixelsToPoints(int heightMetric)
 
 int iV_GetTextLineSize(iV_fonts fontID)
 {
-	FT_Face face = getFTFace(fontID);
+	FT_Face face = getFTFace(fontID, HB_SCRIPT_COMMON); // TODO: Better handling of script-specific font faces?
 	return metricsHeight_PixelsToPoints((face->size->metrics.ascender - face->size->metrics.descender) >> 6);
 }
 
 int iV_GetTextAboveBase(iV_fonts fontID)
 {
-	FT_Face face = getFTFace(fontID);
+	FT_Face face = getFTFace(fontID, HB_SCRIPT_COMMON); // TODO: Better handling of script-specific font faces?
 	return metricsHeight_PixelsToPoints(-(face->size->metrics.ascender >> 6));
 }
 
 int iV_GetTextBelowBase(iV_fonts fontID)
 {
-	FT_Face face = getFTFace(fontID);
+	FT_Face face = getFTFace(fontID, HB_SCRIPT_COMMON); // TODO: Better handling of script-specific font faces?
 	return metricsHeight_PixelsToPoints(face->size->metrics.descender >> 6);
 }
 
@@ -682,7 +1213,23 @@ static bool breaksWord(char const c)
 	return c == ASCII_SPACE || breaksLine(c);
 }
 
-std::vector<TextLine> iV_FormatText(const char *String, UDWORD MaxWidth, UDWORD Justify, iV_fonts fontID, bool ignoreNewlines /*= false*/)
+inline size_t utf8SequenceLength(const char* pChar)
+{
+	uint8_t first = *pChar;
+
+	if (first < 0x80)
+		return 1;
+	else if ((first >> 5) == 0x6)
+		return 2;
+	else if ((first >> 4) == 0xe)
+		return 3;
+	else if ((first >> 3) == 0x1e)
+		return 4;
+
+	return 0;
+}
+
+std::vector<TextLine> iV_FormatText(const WzString& String, UDWORD MaxWidth, UDWORD Justify, iV_fonts fontID, bool ignoreNewlines /*= false*/)
 {
 	std::vector<TextLine> lineDrawResults;
 
@@ -690,12 +1237,14 @@ std::vector<TextLine> iV_FormatText(const char *String, UDWORD MaxWidth, UDWORD 
 	std::string FWord;
 	const int x = 0;
 	const int y = 0;
-	int i;
+	size_t i;
 	int jx = x;		// Default to left justify.
 	int jy = y;
 	UDWORD WWidth;
 	int TWidth;
-	const char *curChar = String;
+	const char *curChar = String.toUtf8().c_str();
+	const char *charEnd = curChar + strlen(curChar);
+	size_t sequenceLen = 1;
 
 	while (*curChar != 0)
 	{
@@ -707,7 +1256,7 @@ std::vector<TextLine> iV_FormatText(const char *String, UDWORD MaxWidth, UDWORD 
 
 		WWidth = 0;
 
-		auto indexWithinLine = 0;
+		size_t indexWithinLine = 0;
 
 		// Parse through the string, adding words until width is achieved.
 		while (*curChar != 0 && (WWidth == 0 || WWidth < MaxWidth) && !NewLine)
@@ -721,9 +1270,20 @@ std::vector<TextLine> iV_FormatText(const char *String, UDWORD MaxWidth, UDWORD 
 			for (
 				;
 				*curChar && ((indexWithinLine == 0 && !breaksLine(*curChar)) || !breaksWord(*curChar));
-				++i, ++curChar, ++indexWithinLine
+				i += sequenceLen, curChar += sequenceLen, indexWithinLine += sequenceLen
 			)
 			{
+				sequenceLen = utf8SequenceLength(curChar);
+				if (sequenceLen == 0)
+				{
+					ASSERT(false, "curr_sequence_length is 0?? for string: %s", String.toUtf8().c_str());
+					sequenceLen = 1;
+				}
+				if (curChar + sequenceLen > charEnd)
+				{
+					sequenceLen = (charEnd - curChar);
+				}
+
 				if (*curChar == ASCII_COLOURMODE) // If it's a colour mode toggle char then just add it to the word.
 				{
 					FWord.push_back(*curChar);
@@ -732,7 +1292,11 @@ std::vector<TextLine> iV_FormatText(const char *String, UDWORD MaxWidth, UDWORD 
 					continue;
 				}
 
-				FWord.push_back(*curChar);
+				// Get the full (possibly multi-byte) sequence for this codepoint
+				for (size_t seqIdx = 0; seqIdx < sequenceLen; ++seqIdx)
+				{
+					FWord.push_back(*(curChar + seqIdx));
+				}
 
 				// Update this line's pixel width.
 				//WWidth = FStringWidth + iV_GetCountedTextWidth(FWord.c_str(), i + 1, fontID);  // This triggers tonnes of valgrind warnings, if the string contains unicode. Adding lots of trailing garbage didn't help... Using iV_GetTextWidth with a null-terminated string, instead.
@@ -822,7 +1386,8 @@ std::vector<TextLine> iV_FormatText(const char *String, UDWORD MaxWidth, UDWORD 
 	return lineDrawResults;
 }
 
-void iV_DrawTextRotated(const char *string, float XPos, float YPos, float rotation, iV_fonts fontID)
+// Needs modification
+void iV_DrawTextRotated(const char* string, float XPos, float YPos, float rotation, iV_fonts fontID)
 {
 	ASSERT_OR_RETURN(, string, "Couldn't render string!");
 
@@ -837,8 +1402,7 @@ void iV_DrawTextRotated(const char *string, float XPos, float YPos, float rotati
 	color.vector[2] = static_cast<UBYTE>(font_colour[2] * 255.f);
 	color.vector[3] = static_cast<UBYTE>(font_colour[3] * 255.f);
 
-	TextRun tr(string, "en", HB_SCRIPT_COMMON, HB_DIRECTION_LTR);
-	DrawTextResult drawResult = getShaper().drawText(tr, getFTFace(fontID));
+	DrawTextResult drawResult = getShaper().drawText(string, fontID);
 
 	if (drawResult.text.width > 0 && drawResult.text.height > 0)
 	{
@@ -876,31 +1440,31 @@ int WzText::lineSize()
 	return mPtsLineSize;
 }
 
-void WzText::setText(const std::string &string, iV_fonts fontID/*, bool delayRender*/)
+void WzText::setText(const WzString &text, iV_fonts fontID/*, bool delayRender*/)
 {
-	if (mText == string && fontID == mFontID)
+	if (mText == text && fontID == mFontID)
 	{
 		return; // cached
 	}
-	drawAndCacheText(string, fontID);
+	drawAndCacheText(text, fontID);
 }
 
-void WzText::drawAndCacheText(const std::string &string, iV_fonts fontID)
+void WzText::drawAndCacheText(const WzString& string, iV_fonts fontID)
 {
 	mFontID = fontID;
 	mText = string;
 	mRenderingHorizScaleFactor = iV_GetHorizScaleFactor();
 	mRenderingVertScaleFactor = iV_GetVertScaleFactor();
 
-	TextRun tr(string, "en", HB_SCRIPT_COMMON, HB_DIRECTION_LTR);
-	FTFace &face = getFTFace(fontID);
+	FTFace &face = getFTFace(fontID, HB_SCRIPT_COMMON);
 	FT_Face &type = face.face();
 
+	// TODO: Better handling here of multiple font faces?
 	mPtsAboveBase = metricsHeight_PixelsToPoints(-(type->size->metrics.ascender >> 6));
 	mPtsLineSize = metricsHeight_PixelsToPoints((type->size->metrics.ascender - type->size->metrics.descender) >> 6);
 	mPtsBelowBase = metricsHeight_PixelsToPoints(type->size->metrics.descender >> 6);
 
-	DrawTextResult drawResult = getShaper().drawText(tr, face);
+	DrawTextResult drawResult = getShaper().drawText(string, fontID);
 	dimensions = Vector2i(drawResult.text.width, drawResult.text.height);
 	offsets = Vector2i(drawResult.text.offset_x, drawResult.text.offset_y);
 	layoutMetrics = Vector2i(drawResult.layoutMetrics.width, drawResult.layoutMetrics.height);
@@ -923,7 +1487,7 @@ void WzText::redrawAndCacheText()
 	drawAndCacheText(mText, mFontID);
 }
 
-WzText::WzText(const std::string &string, iV_fonts fontID)
+WzText::WzText(const WzString &string, iV_fonts fontID)
 {
 	setText(string, fontID);
 }
@@ -970,7 +1534,7 @@ WzText::WzText(WzText&& other)
 
 inline void WzText::updateCacheIfNecessary()
 {
-	if (mText.empty())
+	if (mText.isEmpty())
 	{
 		return; // string is empty (or hasn't yet been set), thus changes have no effect
 	}
@@ -1025,7 +1589,7 @@ void WzText::renderOutlined(int x, int y, PIELIGHT colour, PIELIGHT outlineColou
 
 // Sets the text, truncating to a desired width limit (in *points*) if needed
 // returns: the length of the string that will be drawn (may be less than the input text.length() if truncated)
-size_t WidthLimitedWzText::setTruncatableText(const std::string &text, iV_fonts fontID, size_t limitWidthInPoints)
+size_t WidthLimitedWzText::setTruncatableText(const WzString &text, iV_fonts fontID, size_t limitWidthInPoints)
 {
 	if ((mFullText == text) && (mLimitWidthPts == limitWidthInPoints) && (getFontID() == fontID))
 	{
@@ -1035,10 +1599,14 @@ size_t WidthLimitedWzText::setTruncatableText(const std::string &text, iV_fonts 
 	mFullText = text;
 	mLimitWidthPts = limitWidthInPoints;
 
-	std::string truncatedText = text;
-	while ((truncatedText.length() > 0) && (iV_GetTextWidth(truncatedText.c_str(), fontID) > limitWidthInPoints))
+	WzString truncatedText = text;
+	while ((truncatedText.length() > 0) && (iV_GetTextWidth(truncatedText, fontID) > limitWidthInPoints))
 	{
-		truncatedText.pop_back();
+		if (!truncatedText.pop_back())
+		{
+			ASSERT(false, "WzString::pop_back() failed??");
+			break;
+		}
 	}
 
 	WzText::setText(truncatedText, fontID);

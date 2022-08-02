@@ -32,8 +32,8 @@
 #include "lib/framework/vector.h"
 #include "gamedef.h"
 #include "levels.h"
-#include <3rdparty/json/json_fwd.hpp>
-#include <optional-lite/optional.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <nonstd/optional.hpp>
 #include <sstream>
 /***************************************************************************/
 /*
@@ -54,7 +54,6 @@ bool loadScriptState(char *pFileName);
 
 /// Load the terrain types
 bool loadTerrainTypeMap(const char *pFilePath);
-bool loadTerrainTypeMapOverride(unsigned int tileSet);
 
 bool saveGame(const char *aFileName, GAME_TYPE saveType);
 
@@ -63,6 +62,9 @@ UDWORD getCampaign(const char *fileName);
 
 /*returns the current type of save game being loaded*/
 GAME_TYPE getSaveGameType();
+
+// Removes .gam from a save for display purposes
+const char *savegameWithoutExtension(const char *name);
 
 void gameScreenSizeDidChange(unsigned int oldWidth, unsigned int oldHeight, unsigned int newWidth, unsigned int newHeight);
 void gameDisplayScaleFactorDidChange(float newDisplayScaleFactor);

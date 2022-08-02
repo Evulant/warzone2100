@@ -328,8 +328,8 @@ wzapi::no_return_value wzapi::sendAllianceRequest(WZAPI_PARAMS(int player))
 bool wzapi::orderDroid(WZAPI_PARAMS(DROID* psDroid, int order))
 {
 	SCRIPT_ASSERT(false, context, psDroid, "No valid droid provided");
-	SCRIPT_ASSERT(false, context, order == DORDER_HOLD || order == DORDER_RTR || order == DORDER_STOP
-	              || order == DORDER_RTB || order == DORDER_REARM || order == DORDER_RECYCLE,
+	SCRIPT_ASSERT(false, context, order == DORDER_STOP || order == DORDER_RTB || order == DORDER_RTR ||
+	              order == DORDER_RECYCLE || order == DORDER_REARM || order == DORDER_HOLD,
 	              "Invalid order: %s", getDroidOrderName((DROID_ORDER)order));
 
 	DROID_ORDER_DATA *droidOrder = &psDroid->order;
@@ -1471,7 +1471,7 @@ bool wzapi::isStructureAvailable(WZAPI_PARAMS(std::string structureName, optiona
 }
 
 // additional structure check
-static bool structDoubleCheck(BASE_STATS *psStat, UDWORD xx, UDWORD yy, SDWORD maxBlockingTiles)
+static bool structDoubleCheck(BASE_STATS *psStat, UDWORD xx, UDWORD yy, SDWORD maxBlockingTiles, PROPULSION_TYPE propType)
 {
 	UDWORD		x, y, xTL, yTL, xBR, yBR;
 	UBYTE		count = 0;
@@ -1501,7 +1501,7 @@ static bool structDoubleCheck(BASE_STATS *psStat, UDWORD xx, UDWORD yy, SDWORD m
 	y = yTL;	// top
 	for (x = xTL; x != xBR + 1; x++)
 	{
-		if (fpathBlockingTile(x, y, PROPULSION_TYPE_WHEELED))
+		if (fpathBlockingTile(x, y, propType))
 		{
 			count++;
 			break;
@@ -1511,7 +1511,7 @@ static bool structDoubleCheck(BASE_STATS *psStat, UDWORD xx, UDWORD yy, SDWORD m
 	y = yBR;	// bottom
 	for (x = xTL; x != xBR + 1; x++)
 	{
-		if (fpathBlockingTile(x, y, PROPULSION_TYPE_WHEELED))
+		if (fpathBlockingTile(x, y, propType))
 		{
 			count++;
 			break;
@@ -1521,7 +1521,7 @@ static bool structDoubleCheck(BASE_STATS *psStat, UDWORD xx, UDWORD yy, SDWORD m
 	x = xTL;	// left
 	for (y = yTL + 1; y != yBR; y++)
 	{
-		if (fpathBlockingTile(x, y, PROPULSION_TYPE_WHEELED))
+		if (fpathBlockingTile(x, y, propType))
 		{
 			count++;
 			break;
@@ -1531,7 +1531,7 @@ static bool structDoubleCheck(BASE_STATS *psStat, UDWORD xx, UDWORD yy, SDWORD m
 	x = xBR;	// right
 	for (y = yTL + 1; y != yBR; y++)
 	{
-		if (fpathBlockingTile(x, y, PROPULSION_TYPE_WHEELED))
+		if (fpathBlockingTile(x, y, propType))
 		{
 			count++;
 			break;
@@ -1573,10 +1573,12 @@ optional<scr_position> wzapi::pickStructLocation(WZAPI_PARAMS(const DROID *psDro
 
 	Vector2i offset(psStat->baseWidth * (TILE_UNITS / 2), psStat->baseBreadth * (TILE_UNITS / 2));
 
+	PROPULSION_TYPE propType = (psDroid) ? asPropulsionStats[psDroid->asBits[COMP_PROPULSION]].propulsionType : PROPULSION_TYPE_WHEELED;
+
 	// save a lot of typing... checks whether a position is valid
 #define LOC_OK(_x, _y) (tileOnMap(_x, _y) && \
-                        (!psDroid || fpathCheck(psDroid->pos, Vector3i(world_coord(_x), world_coord(_y), 0), PROPULSION_TYPE_WHEELED)) \
-                        && validLocation(psStat, world_coord(Vector2i(_x, _y)) + offset, 0, player, false) && structDoubleCheck(psStat, _x, _y, maxBlockingTiles))
+                        (!psDroid || fpathCheck(psDroid->pos, Vector3i(world_coord(_x), world_coord(_y), 0), propType)) \
+                        && validLocation(psStat, world_coord(Vector2i(_x, _y)) + offset, 0, player, false) && structDoubleCheck(psStat, _x, _y, maxBlockingTiles, propType))
 
 	// first try the original location
 	if (LOC_OK(startX, startY))
@@ -4373,37 +4375,37 @@ nlohmann::json wzapi::getUsefulConstants()
 
 	constants["TER_WATER"] = TER_WATER;
 	constants["TER_CLIFFFACE"] = TER_CLIFFFACE;
-	constants["WEATHER_CLEAR"] = WT_NONE;
 	constants["WEATHER_RAIN"] = WT_RAINING;
 	constants["WEATHER_SNOW"] = WT_SNOWING;
-	constants["DORDER_ATTACK"] = DORDER_ATTACK;
-	constants["DORDER_OBSERVE"] = DORDER_OBSERVE;
-	constants["DORDER_RECOVER"] = DORDER_RECOVER;
+	constants["WEATHER_CLEAR"] = WT_NONE;
+	constants["DORDER_STOP"] = DORDER_STOP;
 	constants["DORDER_MOVE"] = DORDER_MOVE;
-	constants["DORDER_SCOUT"] = DORDER_SCOUT;
+	constants["DORDER_ATTACK"] = DORDER_ATTACK;
 	constants["DORDER_BUILD"] = DORDER_BUILD;
 	constants["DORDER_HELPBUILD"] = DORDER_HELPBUILD;
 	constants["DORDER_LINEBUILD"] = DORDER_LINEBUILD;
-	constants["DORDER_REPAIR"] = DORDER_REPAIR;
-	constants["DORDER_PATROL"] = DORDER_PATROL;
 	constants["DORDER_DEMOLISH"] = DORDER_DEMOLISH;
+	constants["DORDER_REPAIR"] = DORDER_REPAIR;
+	constants["DORDER_OBSERVE"] = DORDER_OBSERVE;
+	constants["DORDER_FIRESUPPORT"] = DORDER_FIRESUPPORT;
+	constants["DORDER_RTB"] = DORDER_RTB;
+	constants["DORDER_RTR"] = DORDER_RTR;
 	constants["DORDER_EMBARK"] = DORDER_EMBARK;
 	constants["DORDER_DISEMBARK"] = DORDER_DISEMBARK;
-	constants["DORDER_FIRESUPPORT"] = DORDER_FIRESUPPORT;
 	constants["DORDER_COMMANDERSUPPORT"] = DORDER_COMMANDERSUPPORT;
-	constants["DORDER_HOLD"] = DORDER_HOLD;
-	constants["DORDER_RTR"] = DORDER_RTR;
-	constants["DORDER_RTB"] = DORDER_RTB;
-	constants["DORDER_STOP"] = DORDER_STOP;
-	constants["DORDER_REARM"] = DORDER_REARM;
 	constants["DORDER_RECYCLE"] = DORDER_RECYCLE;
-	constants["COMMAND"] = IDRET_COMMAND; // deprecated
+	constants["DORDER_SCOUT"] = DORDER_SCOUT;
+	constants["DORDER_PATROL"] = DORDER_PATROL;
+	constants["DORDER_REARM"] = DORDER_REARM;
+	constants["DORDER_RECOVER"] = DORDER_RECOVER;
+	constants["DORDER_HOLD"] = DORDER_HOLD;
 	constants["BUILD"] = IDRET_BUILD; // deprecated
 	constants["MANUFACTURE"] = IDRET_MANUFACTURE; // deprecated
 	constants["RESEARCH"] = IDRET_RESEARCH; // deprecated
 	constants["INTELMAP"] = IDRET_INTEL_MAP; // deprecated
 	constants["DESIGN"] = IDRET_DESIGN; // deprecated
 	constants["CANCEL"] = IDRET_CANCEL; // deprecated
+	constants["COMMAND"] = IDRET_COMMAND; // deprecated
 	constants["CAMP_CLEAN"] = CAMP_CLEAN;
 	constants["CAMP_BASE"] = CAMP_BASE;
 	constants["CAMP_WALLS"] = CAMP_WALLS;
@@ -4416,59 +4418,60 @@ nlohmann::json wzapi::getUsefulConstants()
 	constants["ULTIMATE_SCAVENGERS"] = ULTIMATE_SCAVENGERS;
 	constants["BEING_BUILT"] = SS_BEING_BUILT;
 	constants["BUILT"] = SS_BUILT;
-	constants["DROID_CONSTRUCT"] = DROID_CONSTRUCT;
 	constants["DROID_WEAPON"] = DROID_WEAPON;
-	constants["DROID_PERSON"] = DROID_PERSON;
-	constants["DROID_REPAIR"] = DROID_REPAIR;
 	constants["DROID_SENSOR"] = DROID_SENSOR;
 	constants["DROID_ECM"] = DROID_ECM;
+	constants["DROID_CONSTRUCT"] = DROID_CONSTRUCT;
+	constants["DROID_PERSON"] = DROID_PERSON;
 	constants["DROID_CYBORG"] = DROID_CYBORG;
 	constants["DROID_TRANSPORTER"] = DROID_TRANSPORTER;
-	constants["DROID_SUPERTRANSPORTER"] = DROID_SUPERTRANSPORTER;
 	constants["DROID_COMMAND"] = DROID_COMMAND;
+	constants["DROID_REPAIR"] = DROID_REPAIR;
+	constants["DROID_SUPERTRANSPORTER"] = DROID_SUPERTRANSPORTER;
 	constants["DROID_ANY"] = DROID_ANY;
-	constants["OIL_RESOURCE"] = FEAT_OIL_RESOURCE;
-	constants["OIL_DRUM"] = FEAT_OIL_DRUM;
 	constants["ARTIFACT"] = FEAT_GEN_ARTE;
+	constants["OIL_RESOURCE"] = FEAT_OIL_RESOURCE;
 	constants["BUILDING"] = FEAT_BUILDING;
+	constants["OIL_DRUM"] = FEAT_OIL_DRUM;
 	constants["HQ"] = REF_HQ;
 	constants["FACTORY"] = REF_FACTORY;
 	constants["POWER_GEN"] = REF_POWER_GEN;
 	constants["RESOURCE_EXTRACTOR"] = REF_RESOURCE_EXTRACTOR;
 	constants["DEFENSE"] = REF_DEFENSE;
-	constants["LASSAT"] = REF_LASSAT;
 	constants["WALL"] = REF_WALL;
 	constants["RESEARCH_LAB"] = REF_RESEARCH;
 	constants["REPAIR_FACILITY"] = REF_REPAIR_FACILITY;
+	constants["COMMAND_CONTROL"] = REF_COMMAND_CONTROL;
 	constants["CYBORG_FACTORY"] = REF_CYBORG_FACTORY;
 	constants["VTOL_FACTORY"] = REF_VTOL_FACTORY;
 	constants["REARM_PAD"] = REF_REARM_PAD;
 	constants["SAT_UPLINK"] = REF_SAT_UPLINK;
 	constants["GATE"] = REF_GATE;
-	constants["COMMAND_CONTROL"] = REF_COMMAND_CONTROL;
+	constants["LASSAT"] = REF_LASSAT;
+	constants["SUPEREASY"] = static_cast<int8_t>(AIDifficulty::SUPEREASY);
 	constants["EASY"] = static_cast<int8_t>(AIDifficulty::EASY);
 	constants["MEDIUM"] = static_cast<int8_t>(AIDifficulty::MEDIUM);
 	constants["HARD"] = static_cast<int8_t>(AIDifficulty::HARD);
 	constants["INSANE"] = static_cast<int8_t>(AIDifficulty::INSANE);
-	constants["STRUCTURE"] = OBJ_STRUCTURE;
-	constants["DROID"] = OBJ_DROID;
-	constants["FEATURE"] = OBJ_FEATURE;
 	constants["ALL_PLAYERS"] = ALL_PLAYERS;
 	constants["ALLIES"] = ALLIES;
 	constants["ENEMIES"] = ENEMIES;
+	constants["DROID"] = OBJ_DROID;
+	constants["STRUCTURE"] = OBJ_STRUCTURE;
+	constants["FEATURE"] = OBJ_FEATURE;
 	constants["POSITION"] = SCRIPT_POSITION;
 	constants["AREA"] = SCRIPT_AREA;
-	constants["RADIUS"] = SCRIPT_RADIUS;
-	constants["GROUP"] = SCRIPT_GROUP;
 	constants["PLAYER_DATA"] = SCRIPT_PLAYER;
 	constants["RESEARCH_DATA"] = SCRIPT_RESEARCH;
+	constants["GROUP"] = SCRIPT_GROUP;
+	constants["RADIUS"] = SCRIPT_RADIUS;
 	constants["LZ_COMPROMISED_TIME"] = JS_LZ_COMPROMISED_TIME;
 	constants["OBJECT_FLAG_UNSELECTABLE"] = OBJECT_FLAG_UNSELECTABLE;
 	// the constants below are subject to change without notice...
-	constants["PROX_MSG"] = MSG_PROXIMITY;
+	constants["RES_MSG"] = MSG_RESEARCH;
 	constants["CAMP_MSG"] = MSG_CAMPAIGN;
 	constants["MISS_MSG"] = MSG_MISSION;
-	constants["RES_MSG"] = MSG_RESEARCH;
+	constants["PROX_MSG"] = MSG_PROXIMITY;
 	constants["LDS_EXPAND_LIMBO"] = static_cast<int8_t>(LEVEL_TYPE::LDS_EXPAND_LIMBO);
 
 	return constants;

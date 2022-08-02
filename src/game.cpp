@@ -2002,7 +2002,7 @@ static void serializeSaveGameData_json(nlohmann::json &o, nlohmann::json &savein
 {
 	serializeSaveGameV38Data_json(o, (const SAVE_GAME_V38 *) serializeGame);
 	// not sure whether its 38, 39 or 40... different .cpp files are using different numbers
-	o["version"] = VERSION_39; 
+	o["version"] = VERSION_39;
 	
 	// This file lists saved games, and their build info
 	// one per savegame directory
@@ -2217,7 +2217,7 @@ static bool loadSaveDroidPointers(const WzString &pFileName, DROID **ppsCurrentD
 static bool writeDroidFile(const char *pFileName, DROID **ppsCurrentDroidLists);
 
 static bool loadSaveStructure(char *pFileData, UDWORD filesize);
-static bool loadSaveStructure2(const char *pFileName, STRUCTURE **ppList);
+static bool loadSaveStructure2(const char *pFileName);
 static bool loadWzMapStructure(WzMap::Map& wzMap);
 static bool loadSaveStructurePointers(const WzString& filename, STRUCTURE **ppList);
 static bool writeStructFile(const char *pFileName);
@@ -2425,7 +2425,7 @@ static void allocatePlayers()
 		NetPlay.players[i].ai = saveGameData.sNetPlay.players[i].ai;
 		NetPlay.players[i].difficulty = saveGameData.sNetPlay.players[i].difficulty;
 //		NetPlay.players[i].faction; // read and initialized by loadMainFile
-		sstrcpy(NetPlay.players[i].name, saveGameData.sNetPlay.players[i].name);
+		setPlayerName(i, saveGameData.sNetPlay.players[i].name);
 		NetPlay.players[i].position = saveGameData.sNetPlay.players[i].position;
 		if (NetPlay.players[i].difficulty == AIDifficulty::HUMAN || (game.type == LEVEL_TYPE::CAMPAIGN && i == 0))
 		{
@@ -2468,7 +2468,7 @@ static WzMap::MapType getWzMapType(bool UserSaveGame)
 // UserSaveGame ... this is true when you are loading a players save game
 bool loadGame(const char *pGameToLoad, bool keepObjects, bool freeMem, bool UserSaveGame)
 {
-	std::unique_ptr<WzMap::Map> data;
+	std::shared_ptr<WzMap::Map> data;
 	std::map<WzString, DROID **> droidMap;
 	std::map<WzString, STRUCTURE **> structMap;
 	char			aFileName[256];
@@ -2551,7 +2551,21 @@ bool loadGame(const char *pGameToLoad, bool keepObjects, bool freeMem, bool User
 			mission.startTime = saveGameData.missionTime;
 		}
 
-		//set the scroll varaibles
+		//set the scroll variables
+		if (saveGameData.ScrollMinX >= 0 && static_cast<uint32_t>(saveGameData.ScrollMinX) > saveGameData.ScrollMaxX)
+		{
+			debug(LOG_ERROR, "ScrollMinX (%" PRIi32 ") exceeds ScrollMaxX %" PRIu32, saveGameData.ScrollMinX, saveGameData.ScrollMaxX);
+			uint32_t newMax = static_cast<uint32_t>(saveGameData.ScrollMinX);
+			saveGameData.ScrollMinX = static_cast<int32_t>(saveGameData.ScrollMaxX);
+			saveGameData.ScrollMaxX = newMax;
+		}
+		if (saveGameData.ScrollMinY >= 0 && static_cast<uint32_t>(saveGameData.ScrollMinY) > saveGameData.ScrollMaxY)
+		{
+			debug(LOG_ERROR, "ScrollMinY (%" PRIi32 ") exceeds ScrollMaxY %" PRIu32, saveGameData.ScrollMinY, saveGameData.ScrollMaxY);
+			uint32_t newMax = static_cast<uint32_t>(saveGameData.ScrollMinY);
+			saveGameData.ScrollMinY = static_cast<int32_t>(saveGameData.ScrollMaxY);
+			saveGameData.ScrollMaxY = newMax;
+		}
 		startX = saveGameData.ScrollMinX;
 		startY = saveGameData.ScrollMinY;
 		width = saveGameData.ScrollMaxX - saveGameData.ScrollMinX;
@@ -2817,7 +2831,7 @@ bool loadGame(const char *pGameToLoad, bool keepObjects, bool freeMem, bool User
 		strcat(aFileName, "mstruct.json");
 
 		//load in the mission structures
-		if (!loadSaveStructure2(aFileName, apsStructLists))
+		if (!loadSaveStructure2(aFileName))
 		{
 			aFileName[fileExten] = '\0';
 			strcat(aFileName, "mstruct.bjo");
@@ -2882,7 +2896,7 @@ bool loadGame(const char *pGameToLoad, bool keepObjects, bool freeMem, bool User
 	// construct the WzMap object for loading map data
 	aFileName[fileExten] = '\0';
 	mapSeed = gameRandU32();
-	data = WzMap::Map::loadFromPath(aFileName, getWzMapType(UserSaveGame), game.maxPlayers, mapSeed, false, std::unique_ptr<WzMap::LoggingProtocol>(new WzMapDebugLogger()), std::unique_ptr<WzMapPhysFSIO>(new WzMapPhysFSIO()));
+	data = WzMap::Map::loadFromPath(aFileName, getWzMapType(UserSaveGame), game.maxPlayers, mapSeed, std::make_shared<WzMapDebugLogger>(), std::make_shared<WzMapPhysFSIO>());
 
 	if (data && data->wasScriptGenerated())
 	{
@@ -3099,7 +3113,7 @@ bool loadGame(const char *pGameToLoad, bool keepObjects, bool freeMem, bool User
 			resetFactoryNumFlag();	//reset flags into the masks
 		}
 	}
-	else if (!loadSaveStructure2(aFileName, apsStructLists))
+	else if (!loadSaveStructure2(aFileName))
 	{
 		debug(LOG_ERROR, "Failed with: %s", aFileName);
 		goto error;
@@ -4033,20 +4047,33 @@ bool gameLoadV7(PHYSFS_file *fileHandle, nonstd::optional<nlohmann::json> &gamJs
 
 			return false;
 		}
+
+		/* GAME_SAVE_V7 */
+		endian_udword(&saveGame.gameTime);
+		endian_udword(&saveGame.GameType);
+		endian_sdword(&saveGame.ScrollMinX);
+		endian_sdword(&saveGame.ScrollMinY);
+		endian_udword(&saveGame.ScrollMaxX);
+		endian_udword(&saveGame.ScrollMaxY);
 	}
-
-
-	/* GAME_SAVE_V7 */
-	endian_udword(&saveGame.gameTime);
-	endian_udword(&saveGame.GameType);
-	endian_sdword(&saveGame.ScrollMinX);
-	endian_sdword(&saveGame.ScrollMinY);
-	endian_udword(&saveGame.ScrollMaxX);
-	endian_udword(&saveGame.ScrollMaxY);
 
 	savedGameTime = saveGame.gameTime;
 
-	//set the scroll varaibles
+	//set the scroll variables
+	if (saveGame.ScrollMinX >= 0 && static_cast<uint32_t>(saveGame.ScrollMinX) > saveGame.ScrollMaxX)
+	{
+		debug(LOG_ERROR, "ScrollMinX (%" PRIi32 ") exceeds ScrollMaxX %" PRIu32, saveGame.ScrollMinX, saveGame.ScrollMaxX);
+		uint32_t newMax = static_cast<uint32_t>(saveGame.ScrollMinX);
+		saveGame.ScrollMinX = static_cast<int32_t>(saveGame.ScrollMaxX);
+		saveGame.ScrollMaxX = newMax;
+	}
+	if (saveGame.ScrollMinY >= 0 && static_cast<uint32_t>(saveGame.ScrollMinY) > saveGame.ScrollMaxY)
+	{
+		debug(LOG_ERROR, "ScrollMinY (%" PRIi32 ") exceeds ScrollMaxY %" PRIu32, saveGame.ScrollMinY, saveGame.ScrollMaxY);
+		uint32_t newMax = static_cast<uint32_t>(saveGame.ScrollMinY);
+		saveGame.ScrollMinY = static_cast<int32_t>(saveGame.ScrollMaxY);
+		saveGame.ScrollMaxY = newMax;
+	}
 	startX = saveGame.ScrollMinX;
 	startY = saveGame.ScrollMinY;
 	width = saveGame.ScrollMaxX - saveGame.ScrollMinX;
@@ -4335,7 +4362,22 @@ bool gameLoadV(PHYSFS_file *fileHandle, unsigned int version, nonstd::optional<n
 	{
 		saveGameOnMission = false;
 	}
-	//set the scroll varaibles
+
+	//set the scroll variables
+	if (saveGameData.ScrollMinX >= 0 && static_cast<uint32_t>(saveGameData.ScrollMinX) > saveGameData.ScrollMaxX)
+	{
+		debug(LOG_ERROR, "ScrollMinX (%" PRIi32 ") exceeds ScrollMaxX %" PRIu32, saveGameData.ScrollMinX, saveGameData.ScrollMaxX);
+		uint32_t newMax = static_cast<uint32_t>(saveGameData.ScrollMinX);
+		saveGameData.ScrollMinX = static_cast<int32_t>(saveGameData.ScrollMaxX);
+		saveGameData.ScrollMaxX = newMax;
+	}
+	if (saveGameData.ScrollMinY >= 0 && static_cast<uint32_t>(saveGameData.ScrollMinY) > saveGameData.ScrollMaxY)
+	{
+		debug(LOG_ERROR, "ScrollMinY (%" PRIi32 ") exceeds ScrollMaxY %" PRIu32, saveGameData.ScrollMinY, saveGameData.ScrollMaxY);
+		uint32_t newMax = static_cast<uint32_t>(saveGameData.ScrollMinY);
+		saveGameData.ScrollMinY = static_cast<int32_t>(saveGameData.ScrollMaxY);
+		saveGameData.ScrollMaxY = newMax;
+	}
 	startX = saveGameData.ScrollMinX;
 	startY = saveGameData.ScrollMinY;
 	width = saveGameData.ScrollMaxX - saveGameData.ScrollMinX;
@@ -4607,6 +4649,8 @@ static bool loadMainFileFinal(const std::string &fileName)
 		{
 			add_to_experience_queue(index, json_variant(v).toInt());
 		}
+		setMultiPlayRecentScore(index, save.value("recentScore", 0).toUInt());
+		setMultiPlayUnitsKilled(index, save.value("recentKills", 0).toUInt());
 		save.nextArrayItem();
 	}
 	save.endArray();
@@ -4700,6 +4744,8 @@ static bool writeMainFile(const std::string &fileName, SDWORD saveType)
 		save.setValue("ip", NetPlay.players[i].IPtextAddress);
 		save.setValue("name", getPlayerName(i));
 		save.setValue("nameAI", getAIName(i));
+		save.setValue("recentScore", getMultiPlayRecentScore(i));
+		save.setValue("recentKills", getMultiPlayUnitsKilled(i));
 
 		save.nextArrayItem();
 	}
@@ -4896,7 +4942,7 @@ static bool writeGameFile(const char *fileName, SDWORD saveType)
 	//version 34
 	for (i = 0; i < MAX_PLAYERS; ++i)
 	{
-		sstrcpy(saveGame.sPlayerName[i], getPlayerName(i));
+		sstrcpy(saveGame.sPlayerName[i], (!challengeActive && NetPlay.players[i].ai >= 0 && !NetPlay.players[i].allocated) ? getAIName(i) : getPlayerName(i));
 	}
 
 	//version 38
@@ -4931,7 +4977,7 @@ static bool writeGameFile(const char *fileName, SDWORD saveType)
 		PHYSFS_mkdir(pathToThisSaveDir.c_str());
 	}
 	const std::string saveInfoJsonFilename = pathToThisSaveDir + "save-info.json";
-	const std::string jsonFileName = pathToThisSaveDir + gameName + ".json";
+	const std::string jsonFileName = pathToThisSaveDir + "gam.json";
 	auto gamJson = nlohmann::json::object();
 	
 	if (!PHYSFS_exists(saveInfoJsonFilename.c_str()))
@@ -4972,9 +5018,22 @@ static nonstd::optional<nlohmann::json> readGamJson(const char* filenameWithGamE
 	ASSERT(lastSep > 0, "unexpected filename format: '%s'", filenameWithGamExtension);
 	const std::string lastSegment(filenameWithGamExtension, lastSep + 1, filenameWithGamExtensionStr.size() - lastSep - 5);
 	const std::string commonPath(filenameWithGamExtension, 0, filenameWithGamExtensionStr.size() - lastSegment.size() - 4);
-	const std::string gamJson = commonPath + lastSegment + "/" + lastSegment + ".json";
-	debug(LOG_SAVEGAME, "last segment was %s, common path %s, save-info %s", lastSegment.c_str(), commonPath.c_str(), gamJson.c_str());
-	return parseJsonFile(gamJson.c_str());
+	const std::string containingFolder = commonPath + lastSegment + "/";
+	// "gam.json" in the containingFolder
+	const std::string gamJson = containingFolder + "gam.json";
+	auto result = parseJsonFile(gamJson.c_str());
+	if (result.has_value())
+	{
+		debug(LOG_SAVEGAME, "last segment was %s, common path %s, save-info %s", lastSegment.c_str(), commonPath.c_str(), gamJson.c_str());
+	}
+	else
+	{
+		// FALLBACK for older saves: prior behavior was to save "<lastSegment>.json" in the containingFolder
+		const std::string oldGamJsonPath = containingFolder + lastSegment + ".json";
+		debug(LOG_SAVEGAME, "last segment was %s, common path %s, save-info %s", lastSegment.c_str(), commonPath.c_str(), oldGamJsonPath.c_str());
+		result = parseJsonFile(oldGamJsonPath.c_str());
+	}
+	return result;
 }
 
 nonstd::optional<nlohmann::json> parseJsonFile(const char *filename)
@@ -4987,7 +5046,16 @@ nonstd::optional<nlohmann::json> parseJsonFile(const char *filename)
 		debug(LOG_SAVE, "No %s found, sad", filename);
 		return nullopt;
 	}
-	return nlohmann::json::parse(ppFileData);
+	nonstd::optional<nlohmann::json> result;
+	try {
+		result = nlohmann::json::parse(ppFileData);
+	}
+	catch (const std::exception &e) {
+		ASSERT(false, "JSON document from %s is invalid: %s", filename, e.what());
+		result = nullopt;
+	}
+	free(ppFileData);
+	return result;
 }
 
 static uint32_t RemapWzMapPlayerNumber(int8_t oldNumber)
@@ -5036,16 +5104,19 @@ static bool loadWzMapDroidInit(WzMap::Map &wzMap)
 			continue;
 		}
 		turnOffMultiMsg(true);
-		auto psDroid = reallyBuildDroid(psTemplate, Position(droid.position.x, droid.position.y, 0), player, false, {droid.direction, 0, 0});
+		DROID *psDroid = nullptr;
+		if (droid.id.has_value() && droid.id.value() > 0)
+		{
+			psDroid = reallyBuildDroid(psTemplate, Position(droid.position.x, droid.position.y, 0), player, false, {droid.direction, 0, 0}, droid.id.value());
+		} else
+		{
+			psDroid = reallyBuildDroid(psTemplate, Position(droid.position.x, droid.position.y, 0), player, false, {droid.direction, 0, 0});
+		}
 		turnOffMultiMsg(false);
 		if (psDroid == nullptr)
 		{
 			debug(LOG_ERROR, "Failed to build unit %s", droid.name.c_str());
 			continue;
-		}
-		if (droid.id.has_value())
-		{
-			psDroid->id = droid.id.value() > 0 ? droid.id.value() : 0xFEDBCA98;	// hack to remove droid id zero
 		}
 		ASSERT(psDroid->id != 0, "Droid ID should never be zero here");
 
@@ -5141,20 +5212,6 @@ static inline void setPlayerJSON(nlohmann::json &jsonObj, int player)
 	}
 }
 
-static bool skipForDifficulty(WzConfig &ini, int player)
-{ 
-	if (ini.contains("difficulty")) // optionally skip this object
-	{
-		int difficulty = ini.value("difficulty").toInt();
-		if ((game.type == LEVEL_TYPE::CAMPAIGN && difficulty > (int)getDifficultyLevel())
-		    || (game.type == LEVEL_TYPE::SKIRMISH && difficulty > static_cast<int8_t>(NetPlay.players[player].difficulty)))
-		{
-			return true;
-		}
-	}
-	return false;
-}
-
 static bool loadSaveDroidPointers(const WzString &pFileName, DROID **ppsCurrentDroidLists)
 {
 	WzConfig ini(pFileName, WzConfig::ReadOnly);
@@ -5171,11 +5228,6 @@ static bool loadSaveDroidPointers(const WzString &pFileName, DROID **ppsCurrentD
 		{
 			ini.endGroup();
 			continue; // special hack for campaign missions, cannot have targets
-		}
-		if (skipForDifficulty(ini, player))
-		{
-			ini.endGroup();
-			continue; // another hack for campaign missions, cannot have targets
 		}
 
 		for (psDroid = ppsCurrentDroidLists[player]; psDroid && psDroid->id != id; psDroid = psDroid->psNext)
@@ -5434,12 +5486,6 @@ static bool loadSaveDroid(const char *pFileName, DROID **ppsCurrentDroidLists)
 		DROID_TEMPLATE templ;
 		const DROID_TEMPLATE *psTemplate = nullptr;
 
-		if (skipForDifficulty(ini, player))
-		{
-			ini.endGroup();
-			continue;
-		}
-
 		if (ini.contains("template"))
 		{
 			// Use real template (for maps)
@@ -5482,15 +5528,16 @@ static bool loadSaveDroid(const char *pFileName, DROID **ppsCurrentDroidLists)
 
 		/* Create the Droid */
 		turnOffMultiMsg(true);
-		psDroid = reallyBuildDroid(psTemplate, pos, player, onMission, rot);
-		ASSERT_OR_RETURN(false, psDroid != nullptr, "Failed to build unit %s", sortedList[i].second.toUtf8().c_str());
-		turnOffMultiMsg(false);
-
-		// Copy the values across
 		if (id > 0)
 		{
-			psDroid->id = id; // force correct ID, unless ID is set to eg -1, in which case we should keep new ID (useful for starting units in campaign)
+			psDroid = reallyBuildDroid(psTemplate, pos, player, onMission, rot, id);
+		} else
+		{
+			// will generate a new id
+			psDroid = reallyBuildDroid(psTemplate, pos, player, onMission, rot);
 		}
+		ASSERT_OR_RETURN(false, psDroid != nullptr, "Failed to build unit %s", sortedList[i].second.toUtf8().c_str());
+		turnOffMultiMsg(false);
 		ASSERT(id != 0, "Droid ID should never be zero here");
 		// conditional check so that existing saved games don't break
 		if (ini.contains("originalBody"))
@@ -5908,9 +5955,7 @@ bool loadSaveStructure(char *pFileData, UDWORD filesize)
 		{
 			continue;
 		}
-		// The original code here didn't work and so the scriptwriters worked round it by using the module ID - so making it work now will screw up
-		// the scripts -so in ALL CASES overwrite the ID!
-		psStructure->id = psSaveStructure->id > 0 ? psSaveStructure->id : 0xFEDBCA98; // hack to remove struct id zero
+
 		psStructure->periodicalDamage = psSaveStructure->periodicalDamage;
 		periodicalDamageTime = psSaveStructure->periodicalDamageStart;
 		psStructure->periodicalDamageStart = periodicalDamageTime;
@@ -5992,18 +6037,26 @@ static bool loadWzMapStructure(WzMap::Map& wzMap)
 			player = MAX_PLAYERS - 1;
 			NumberOfSkippedStructures++;
 		}
-		STRUCTURE *psStructure = buildStructureDir(psStats, structure.position.x, structure.position.y, structure.direction, player, true);
+		STRUCTURE *psStructure = nullptr;
+		debug(LOG_NEVER, "trying to build structure %i;%i;%s;%i;%i", structure.id.value(), player, 
+				structure.name.c_str(), map_coord(structure.position.x), map_coord(structure.position.y));
+		if (structure.id.has_value() && structure.id.value() > 0)
+		{
+			psStructure = buildStructureDir(psStats, structure.position.x, structure.position.y, structure.direction, player, true, structure.id.value());
+		} else
+		{
+			// generate new synchronised id
+			psStructure = buildStructureDir(psStats, structure.position.x, structure.position.y, structure.direction, player, true);
+		}
+		
 		if (psStructure == nullptr)
 		{
 			debug(LOG_ERROR, "Structure %s couldn't be built (probably on top of another structure).", structure.name.c_str());
 			continue;
 		}
-		if (structure.id.has_value())
-		{
-			// The original code here didn't work and so the scriptwriters worked round it by using the module ID - so making it work now will screw up
-			// the scripts -so in ALL CASES overwrite the ID!
-			psStructure->id = structure.id.value() > 0 ? structure.id.value() : 0xFEDBCA98; // hack to remove struct id zero
-		}
+		// Previously, we would override building's ID with module's ID
+		// now, "id" is const, we can't do that. 
+		// this may break some mods which look up structures by theirs module id.
 		if (structure.modules > 0)
 		{
 			auto moduleStat = getModuleStat(psStructure);
@@ -6039,7 +6092,7 @@ static bool loadWzMapStructure(WzMap::Map& wzMap)
 
 // -----------------------------------------------------------------------------------------
 /* code for versions after version 20 of a save structure */
-static bool loadSaveStructure2(const char *pFileName, STRUCTURE **ppList)
+static bool loadSaveStructure2(const char *pFileName)
 {
 	if (!PHYSFS_exists(pFileName))
 	{
@@ -6097,18 +6150,18 @@ static bool loadSaveStructure2(const char *pFileName, STRUCTURE **ppList)
 			ini.endGroup();
 			continue; // skip it
 		}
-		psStructure = buildStructureDir(psStats, pos.x, pos.y, rot.direction, player, true);
+		if (id <= 0)
+		{
+			id = generateSynchronisedObjectId();
+		}
+		debug(LOG_NEVER, "trying to build structure %i;%i;%s;%i;%i", id, player, psStats->name.toUtf8().c_str(), map_coord(pos.y), map_coord(pos.y));
+		psStructure = buildStructureDir(psStats, pos.x, pos.y, rot.direction, player, true, id);
 		ASSERT(psStructure, "Unable to create structure");
 		if (!psStructure)
 		{
 			ini.endGroup();
 			continue;
 		}
-		if (id > 0)
-		{
-			psStructure->id = id;	// force correct ID
-		}
-
 		// common BASE_OBJECT info
 		loadSaveObject(ini, psStructure);
 
@@ -6141,6 +6194,7 @@ static bool loadSaveStructure2(const char *pFileName, STRUCTURE **ppList)
 				for (int moduleIdx = 0; moduleIdx < capacity; moduleIdx++)
 				{
 					buildStructure(psModule, psStructure->pos.x, psStructure->pos.y, psStructure->player, true);
+					
 				}
 			}
 			if (ini.contains("Factory/template"))
@@ -6330,6 +6384,11 @@ bool writeStructFile(const char *pFileName)
 	{
 		for (STRUCTURE *psCurr = apsStructLists[player]; psCurr != nullptr; psCurr = psCurr->psNext)
 		{
+			if (!psCurr->pStructureType)
+			{
+				ASSERT(psCurr->pStructureType, "Structure has null pStructureType??");
+				continue;
+			}
 			ini.beginGroup("structure_" + (WzString::number(counter++).leftPadToMinimumLength(WzUniCodepoint::fromASCII('0'), 10)));  // Zero padded so that alphabetical sort works.
 			ini.setValue("name", psCurr->pStructureType->id);
 
@@ -6637,12 +6696,12 @@ bool loadSaveFeature(char *pFileData, UDWORD filesize)
 		//if haven't found the feature - ignore this record!
 		if (!found)
 		{
-			debug(LOG_ERROR, "This feature no longer exists - %s", psSaveFeature->name);
+			debug(LOG_ERROR, "This feature no longer exists - %s;%i", psSaveFeature->name, psSaveFeature->id);
 			//ignore this
 			continue;
 		}
 		//create the Feature
-		pFeature = buildFeature(psStats, psSaveFeature->x, psSaveFeature->y, true);
+		pFeature = buildFeature(psStats, psSaveFeature->x, psSaveFeature->y, true, psSaveFeature->id);
 		if (!pFeature)
 		{
 			debug(LOG_ERROR, "Unable to create feature %s", psSaveFeature->name);
@@ -6653,7 +6712,6 @@ bool loadSaveFeature(char *pFileData, UDWORD filesize)
 			scriptSetDerrickPos(pFeature->pos.x, pFeature->pos.y);
 		}
 		//restore values
-		pFeature->id = psSaveFeature->id;
 		pFeature->rot.direction = DEG(psSaveFeature->direction);
 		pFeature->periodicalDamage = psSaveFeature->periodicalDamage;
 		if (psHeader->version >= VERSION_14)
@@ -6685,7 +6743,15 @@ static bool loadWzMapFeature(WzMap::Map &wzMap)
 			continue;  // ignore this
 		}
 		// Create the Feature
-		auto pFeature = buildFeature(psStats, feature.position.x, feature.position.y, true);
+		FEATURE *pFeature = nullptr;
+		//restore values && create Feature
+		if (feature.id.has_value())
+		{
+			pFeature = buildFeature(psStats, feature.position.x, feature.position.y, true, feature.id.value());
+		} else
+		{
+			pFeature = buildFeature(psStats, feature.position.x, feature.position.y, true);
+		}
 		if (!pFeature)
 		{
 			debug(LOG_ERROR, "Unable to create feature %s", feature.name.c_str());
@@ -6695,15 +6761,7 @@ static bool loadWzMapFeature(WzMap::Map &wzMap)
 		{
 			scriptSetDerrickPos(pFeature->pos.x, pFeature->pos.y);
 		}
-		//restore values
-		if (feature.id.has_value())
-		{
-			pFeature->id = feature.id.value();
-		}
-		else
-		{
-			pFeature->id = generateSynchronisedObjectId();
-		}
+
 		pFeature->rot.direction = feature.direction;
 		pFeature->player = (feature.player.has_value()) ? feature.player.value() : PLAYER_FEATURE;
 	}
@@ -6751,7 +6809,15 @@ bool loadSaveFeature2(const char *pFileName)
 			continue;
 		}
 		//create the Feature
-		pFeature = buildFeature(psStats, pos.x, pos.y, true);
+		int id = ini.value("id", -1).toInt();
+		if (id > 0)
+		{
+			pFeature = buildFeature(psStats, pos.x, pos.y, true, id);
+		}
+		else
+		{
+			pFeature = buildFeature(psStats, pos.x, pos.y, true);
+		}
 		if (!pFeature)
 		{
 			debug(LOG_ERROR, "Unable to create feature %s", name.toUtf8().c_str());
@@ -6762,15 +6828,6 @@ bool loadSaveFeature2(const char *pFileName)
 			scriptSetDerrickPos(pFeature->pos.x, pFeature->pos.y);
 		}
 		//restore values
-		int id = ini.value("id", -1).toInt();
-		if (id > 0)
-		{
-			pFeature->id = id;
-		}
-		else
-		{
-			pFeature->id = generateSynchronisedObjectId();
-		}
 		pFeature->rot = ini.vector3i("rotation");
 		pFeature->player = ini.value("player", PLAYER_FEATURE).toInt();
 
@@ -6945,7 +7002,7 @@ bool loadTerrainTypeMap(const char *pFilePath)
 	return true;
 }
 
-bool loadTerrainTypeMapOverride(unsigned int tileSet)
+bool loadTerrainTypeMapOverride(MAP_TILESET tileSet)
 {
 	resForceBaseDir("/data/base/");
 	WzString iniName = "tileset/tileTypes.json";
@@ -6957,23 +7014,21 @@ bool loadTerrainTypeMapOverride(unsigned int tileSet)
 	WzConfig ini(iniName, WzConfig::ReadOnly);
 	WzString tileTypeKey;
 
-	if (tileSet == ARIZONA)
+	switch (tileSet)
 	{
-		tileTypeKey = "Arizona";
-	}
-	else if (tileSet == URBAN)
-	{
-		tileTypeKey = "Urban";
-	}
-	else if (tileSet == ROCKIE)
-	{
-		tileTypeKey = "Rockies";
-	}
-	else
-	{
-		debug(LOG_ERROR, "Unknown tile type");
-		resForceBaseDir("");
-		return false;
+		case MAP_TILESET::ARIZONA:
+			tileTypeKey = "Arizona";
+			break;
+		case MAP_TILESET::URBAN:
+			tileTypeKey = "Urban";
+			break;
+		case MAP_TILESET::ROCKIES:
+			tileTypeKey = "Rockies";
+			break;
+//		default:
+//			debug(LOG_ERROR, "Unknown tile type");
+//			resForceBaseDir("");
+//			return false;
 	}
 
 	std::vector<WzString> list = ini.childGroups();
@@ -7265,7 +7320,7 @@ bool loadSaveResearch(const char *pFileName)
 
 			psPlRes = &asPlayerResList[plr][statInc];
 			// Copy the research status
-			psPlRes->ResearchStatus = (researched & RESBITS);
+			psPlRes->ResearchStatus = (researched & RESBITS_ALL);
 			SetResearchPossible(psPlRes, possible);
 			psPlRes->currentPoints = points;
 			//for any research that has been completed - perform so that upgrade values are set up
@@ -7293,9 +7348,9 @@ static bool writeResearchFile(char *pFileName)
 		for (int player = 0; player < game.maxPlayers; player++)
 		{
 			possibles.push_back(WzString::number(GetResearchPossible(&asPlayerResList[player][i])));
-			researched.push_back(WzString::number(asPlayerResList[player][i].ResearchStatus & RESBITS));
+			researched.push_back(WzString::number(asPlayerResList[player][i].ResearchStatus & RESBITS_ALL));
 			points.push_back(WzString::number(asPlayerResList[player][i].currentPoints));
-			if (IsResearchPossible(&asPlayerResList[player][i]) || (asPlayerResList[player][i].ResearchStatus & RESBITS) || asPlayerResList[player][i].currentPoints)
+			if (IsResearchPossible(&asPlayerResList[player][i]) || (asPlayerResList[player][i].ResearchStatus & RESBITS_ALL) || asPlayerResList[player][i].currentPoints)
 			{
 				valid = true;	// write this entry
 			}
@@ -7707,4 +7762,13 @@ static void setMapScroll()
 GAME_TYPE getSaveGameType()
 {
 	return gameType;
+}
+
+const char *savegameWithoutExtension(const char *name)
+{
+	static char displaySavegameName[256] = {'\0'};
+	sstrcpy(displaySavegameName, name);
+	displaySavegameName[std::max<size_t>(strlen(displaySavegameName), 4) - 4] = '\0'; //axe the .gam
+
+	return displaySavegameName;
 }

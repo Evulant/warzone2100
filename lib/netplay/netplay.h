@@ -249,6 +249,7 @@ public:
 
 enum class AIDifficulty : int8_t
 {
+	SUPEREASY,
 	EASY,
 	MEDIUM,
 	HARD,
@@ -544,6 +545,18 @@ struct PlayerReference
 	bool isHost() const
 	{
 		return index == NetPlay.hostPlayer;
+	}
+
+	bool isDetached() const
+	{
+		return detached != nullptr;
+	}
+
+	// Generally prefer to use the -> operator!
+	// (This is only safe if isDetached() == false !!)
+	uint32_t originalIndex() const
+	{
+		return index;
 	}
 
 private:

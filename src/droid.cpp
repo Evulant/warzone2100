@@ -93,6 +93,14 @@ static void groupConsoleInformOfRemoval();
 static void droidUpdateDroidSelfRepair(DROID *psRepairDroid);
 static UDWORD calcDroidBaseBody(DROID *psDroid);
 
+int getTopExperience(int player)
+{
+	if (recycled_experience[player].size() == 0)
+	{
+		return 0;
+	}
+	return recycled_experience[player].top();
+}
 void cancelBuild(DROID *psDroid)
 {
 	if (psDroid->order.type == DORDER_NONE || psDroid->order.type == DORDER_PATROL || psDroid->order.type == DORDER_HOLD || psDroid->order.type == DORDER_SCOUT || psDroid->order.type == DORDER_GUARD)
@@ -959,7 +967,8 @@ DroidStartBuild droidStartBuild(DROID *psDroid)
 			return DroidStartBuildPending;
 		}
 		//ok to build
-		psStruct = buildStructureDir(psStructStat, psDroid->order.pos.x, psDroid->order.pos.y, psDroid->order.direction, psDroid->player, false);
+		const auto id = generateSynchronisedObjectId();
+		psStruct = buildStructureDir(psStructStat, psDroid->order.pos.x, psDroid->order.pos.y, psDroid->order.direction, psDroid->player, false, id);
 		if (!psStruct)
 		{
 			cancelBuild(psDroid);
@@ -1564,14 +1573,14 @@ UDWORD calcDroidPower(const DROID *psDroid)
 }
 
 //Builds an instance of a Droid - the x/y passed in are in world coords.
-DROID *reallyBuildDroid(const DROID_TEMPLATE *pTemplate, Position pos, UDWORD player, bool onMission, Rotation rot)
+DROID *reallyBuildDroid(const DROID_TEMPLATE *pTemplate, Position pos, UDWORD player, bool onMission, Rotation rot, uint32_t id)
 {
 	// Don't use this assertion in single player, since droids can finish building while on an away mission
 	ASSERT(!bMultiPlayer || worldOnMap(pos.x, pos.y), "the build locations are not on the map");
 
 	ASSERT_OR_RETURN(nullptr, player < MAX_PLAYERS, "Invalid player: %" PRIu32 "", player);
 
-	DROID *psDroid = new DROID(generateSynchronisedObjectId(), player);
+	DROID *psDroid = new DROID(id, player);
 	droidSetName(psDroid, getStatsName(pTemplate));
 
 	// Set the droids type
@@ -1669,6 +1678,12 @@ DROID *reallyBuildDroid(const DROID_TEMPLATE *pTemplate, Position pos, UDWORD pl
 	debug(LOG_LIFE, "created droid for player %d, droid = %p, id=%d (%s): position: x(%d)y(%d)z(%d)", player, static_cast<void *>(psDroid), (int)psDroid->id, psDroid->aName, psDroid->pos.x, psDroid->pos.y, psDroid->pos.z);
 
 	return psDroid;
+}
+
+DROID *reallyBuildDroid(const DROID_TEMPLATE *pTemplate, Position pos, UDWORD player, bool onMission, Rotation rot)
+{
+	const auto id = generateSynchronisedObjectId();
+	return reallyBuildDroid(pTemplate, pos, player, onMission, rot, id);
 }
 
 DROID *buildDroid(DROID_TEMPLATE *pTemplate, UDWORD x, UDWORD y, UDWORD player, bool onMission, const INITIAL_DROID_ORDERS *initialOrders, Rotation rot)
@@ -1899,17 +1914,19 @@ bool activateNoGroup(UDWORD playerNumber, const SELECTIONTYPE selectionType, con
 	FLAG_POSITION	*psFlagPos;
 	SELECTIONTYPE dselectionType = selectionType;
 	SELECTION_CLASS dselectionClass = selectionClass;
+	unsigned selectionCount = 0;
 	bool dbOnScreen = bOnScreen;
 
 	ASSERT_OR_RETURN(false, playerNumber < MAX_PLAYERS, "Invalid player: %" PRIu32 "", playerNumber);
 
-	selDroidSelection(selectedPlayer, dselectionClass, dselectionType, dbOnScreen);
+	selectionCount = selDroidSelection(selectedPlayer, dselectionClass, dselectionType, dbOnScreen);
 	for (psDroid = apsDroidLists[playerNumber]; psDroid; psDroid = psDroid->psNext)
 	{
 		/* Wipe out the ones in the wrong group */
 		if (psDroid->selected && psDroid->group != UBYTE_MAX)
 		{
 			DeSelectDroid(psDroid);
+			selectionCount--;
 		}
 	}
 	if (selected)
@@ -1922,6 +1939,7 @@ bool activateNoGroup(UDWORD playerNumber, const SELECTIONTYPE selectionType, con
 			psFlagPos->selected = false;
 		}
 	}
+	CONPRINTF(ngettext("%u unit selected", "%u units selected", selectionCount), selectionCount);
 	return selected;
 }
 
@@ -2132,17 +2150,13 @@ struct rankMap
 	const char  *name;           // name of this rank
 };
 
-unsigned int getDroidLevel(const DROID *psDroid)
+unsigned int getDroidLevel(unsigned int experience, uint8_t player, uint8_t brainComponent)
 {
-	unsigned int numKills = psDroid->experience / 65536;
-	unsigned int i;
-
-	// Search through the array of ranks until one is found
-	// which requires more kills than the droid has.
-	// Then fall back to the previous rank.
-	const BRAIN_STATS *psStats = getBrainStats(psDroid);
-	auto &vec = psStats->upgrade[psDroid->player].rankThresholds;
-	for (i = 1; i < vec.size(); ++i)
+	unsigned int numKills = experience / 65536;
+	const BRAIN_STATS *psStats = asBrainStats + brainComponent;
+	auto &vec = psStats->upgrade[player].rankThresholds;
+	ASSERT_OR_RETURN(0, vec.size() > 0, "rankThreshold was empty?");
+	for (int i = 1; i < vec.size(); ++i)
 	{
 		if (numKills < vec.at(i))
 		{
@@ -2152,6 +2166,11 @@ unsigned int getDroidLevel(const DROID *psDroid)
 
 	// If the criteria of the last rank are met, then select the last one
 	return vec.size() - 1;
+}
+
+unsigned int getDroidLevel(const DROID *psDroid)
+{
+	return getDroidLevel(psDroid->experience, psDroid->player, psDroid->asBits[COMP_BRAIN]);
 }
 
 UDWORD getDroidEffectiveLevel(const DROID *psDroid)

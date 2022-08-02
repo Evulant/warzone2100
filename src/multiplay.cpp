@@ -32,6 +32,7 @@
 #include "lib/framework/input.h"
 #include "lib/framework/strres.h"
 #include "lib/framework/physfs_ext.h"
+#include "lib/ivis_opengl/piepalette.h" // for pal_Init()
 #include "map.h"
 
 #include "game.h"									// for loading maps
@@ -82,6 +83,7 @@
 #include "warzoneconfig.h"
 #include "stdinreader.h"
 #include "spectatorwidgets.h"
+#include "challenge.h"
 
 // ////////////////////////////////////////////////////////////////////////////
 // ////////////////////////////////////////////////////////////////////////////
@@ -95,7 +97,7 @@ MULTIPLAYERGAME				game;									//info to describe game.
 MULTIPLAYERINGAME			ingame;
 
 char						beaconReceiveMsg[MAX_PLAYERS][MAX_CONSOLE_STRING_LENGTH];	//beacon msg for each player
-char								playerName[MAX_PLAYERS][MAX_STR_LENGTH];	//Array to store all player names (humans and AIs)
+char						playerName[MAX_CONNECTED_PLAYERS][MAX_STR_LENGTH];	//Array to store all player names (humans and AIs)
 
 #define DATACHECK2_INTERVAL_MS 10000
 
@@ -454,16 +456,8 @@ DROID *IdToMissionDroid(UDWORD id, UDWORD player)
 	return nullptr;
 }
 
-// ////////////////////////////////////////////////////////////////////////////
-// find a structure
-STRUCTURE *IdToStruct(UDWORD id, UDWORD player)
+static STRUCTURE* _IdToStruct(UDWORD id, UDWORD beginPlayer, UDWORD endPlayer)
 {
-	int beginPlayer = 0, endPlayer = MAX_PLAYERS;
-	if (player != ANYPLAYER)
-	{
-		beginPlayer = player;
-		endPlayer = std::min<int>(player + 1, MAX_PLAYERS);
-	}
 	STRUCTURE **lists[2] = {apsStructLists, mission.apsStructLists};
 	for (int j = 0; j < 2; ++j)
 	{
@@ -477,6 +471,24 @@ STRUCTURE *IdToStruct(UDWORD id, UDWORD player)
 				}
 			}
 		}
+	}
+	return nullptr;
+}
+// ////////////////////////////////////////////////////////////////////////////
+// find a structure
+STRUCTURE *IdToStruct(UDWORD id, UDWORD player)
+{
+	int beginPlayer = 0, endPlayer = MAX_PLAYERS;
+	if (player != ANYPLAYER)
+	{
+		beginPlayer = player;
+		endPlayer = std::min<int>(player + 1, MAX_PLAYERS);
+	}
+	STRUCTURE *out = nullptr;
+	out = _IdToStruct(id, beginPlayer, endPlayer);
+	if (out)
+	{
+		return out;
 	}
 	return nullptr;
 }
@@ -556,22 +568,19 @@ BASE_OBJECT *IdToPointer(UDWORD id, UDWORD player)
 
 // ////////////////////////////////////////////////////////////////////////////
 // return a players name.
-const char *getPlayerName(int player)
+const char *getPlayerName(int player, bool storedName /*= false*/)
 {
 	ASSERT_OR_RETURN(nullptr, player >= 0, "Wrong player index: %d", player);
 
+	const bool aiPlayer = (static_cast<size_t>(player) < NetPlay.players.size()) && (NetPlay.players[player].ai >= 0) && !NetPlay.players[player].allocated;
+
 	// playerName is created through setPlayerName()
-	if (player < MAX_PLAYERS && strcmp(playerName[player], "") != 0)
+	if (storedName && !aiPlayer && player < MAX_CONNECTED_PLAYERS && strcmp(playerName[player], "") != 0)
 	{
 		return (char *)&playerName[player];
 	}
 
-	if (static_cast<size_t>(player) >= NetPlay.players.size() || strlen(NetPlay.players[player].name) == 0)
-	{
-		// for campaign and tutorials
-		return _("Commander");
-	}
-	else if (NetPlay.players[player].ai >= 0 && !NetPlay.players[player].allocated)
+	if (aiPlayer && GetGameMode() == GS_NORMAL && !challengeActive)
 	{
 		ASSERT_OR_RETURN("", player < MAX_PLAYERS, "invalid player: %d", player);
 		static char names[MAX_PLAYERS][StringSize];  // Must be static, since the getPlayerName() return value is used in tool tips... Long live the widget system.
@@ -582,18 +591,25 @@ const char *getPlayerName(int player)
 		return names[player];
 	}
 
+	if (static_cast<size_t>(player) >= NetPlay.players.size() || strlen(NetPlay.players[player].name) == 0)
+	{
+		// for campaign and tutorials
+		return _("Commander");
+	}
+
 	return NetPlay.players[player].name;
 }
 
 bool setPlayerName(int player, const char *sName)
 {
-	ASSERT_OR_RETURN(false, player < MAX_PLAYERS && player >= 0, "Player index (%u) out of range", player);
-	sstrcpy(playerName[player], sName);
+	ASSERT_OR_RETURN(false, player < MAX_CONNECTED_PLAYERS && player >= 0, "Player index (%u) out of range", player);
+	sstrcpy(playerName[player], sName); // Intended for long time storage of player name for Intel menu viewing.
+	sstrcpy(NetPlay.players[player].name, sName);
 	return true;
 }
 
 // ////////////////////////////////////////////////////////////////////////////
-// to determine human/computer players and responsibilities of each..
+// to determine human/computer players and responsibilities of each.
 bool isHumanPlayer(int player)
 {
 	if (player >= MAX_CONNECTED_PLAYERS || player < 0)
@@ -601,6 +617,24 @@ bool isHumanPlayer(int player)
 		return false;	// obvious, really
 	}
 	return NetPlay.players[player].allocated;
+}
+
+// Clear player name data after game quit.
+void clearPlayerName(unsigned int player)
+{
+	if (player == CLEAR_ALL_NAMES)
+	{
+		for (unsigned int i = 0; i < MAX_CONNECTED_PLAYERS; ++i)
+		{
+			playerName[i][0] = '\0';
+			NetPlay.players[i].name[0] = '\0';
+		}
+	}
+	else
+	{
+		playerName[player][0] = '\0';
+		NetPlay.players[player].name[0] = '\0';
+	}
 }
 
 // returns player responsible for 'player'
@@ -1638,6 +1672,27 @@ bool recvResearchStatus(NETQUEUE queue)
 	return true;
 }
 
+void setPlayerMuted(uint32_t playerIdx, bool muted)
+{
+	ASSERT_OR_RETURN(, playerIdx < MAX_CONNECTED_PLAYERS, "Invalid playerIdx: %" PRIu32, playerIdx);
+	if (muted == ingame.muteChat[playerIdx])
+	{
+		// no change
+		return;
+	}
+	ingame.muteChat[playerIdx] = muted;
+	if (isHumanPlayer(playerIdx))
+	{
+		storePlayerMuteOption(NetPlay.players[playerIdx].name, getMultiStats(playerIdx).identity, muted);
+	}
+}
+
+bool isPlayerMuted(uint32_t sender)
+{
+	ASSERT_OR_RETURN(false, sender < MAX_CONNECTED_PLAYERS, "Invalid sender: %" PRIu32, sender);
+	return ingame.muteChat[sender];
+}
+
 NetworkTextMessage::NetworkTextMessage(int32_t messageSender, char const *messageText)
 {
 	sender = messageSender;
@@ -1756,6 +1811,11 @@ bool receiveInGameTextMessage(NETQUEUE queue)
 {
 	NetworkTextMessage message;
 	if (!message.receive(queue)) {
+		return false;
+	}
+
+	if (message.sender >= 0 && isPlayerMuted(message.sender))
+	{
 		return false;
 	}
 
@@ -2017,7 +2077,7 @@ bool recvMapFileData(NETQUEUE queue)
 		levShutDown();
 		levInitialise();
 		rebuildSearchPath(mod_multiplay, true);	// MUST rebuild search path for the new maps we just got!
-		reInitPaletteAndFog(); //Update palettes.
+		pal_Init(); //Update palettes.
 		if (!buildMapList())
 		{
 			return false;

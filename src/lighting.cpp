@@ -309,11 +309,12 @@ void updateFogDistance(float distance)
 
 void setDefaultFogColour()
 {
-	if (strcmp(tilesetDir, "texpages/tertilesc2hw") == 0) // Urban = 0x101040 (or, 0xc9920f)
+	ASSERT(tilesetDir != nullptr, "Uninitialized tilesetDir");
+	if (tilesetDir && strcmp(tilesetDir, "texpages/tertilesc2hw") == 0) // Urban = 0x101040 (or, 0xc9920f)
 	{
 		pie_SetFogColour(WZCOL_FOG_URBAN);
 	}
-	else if (strcmp(tilesetDir, "texpages/tertilesc3hw") == 0) // Rockies = 0xb6e1ec
+	else if (tilesetDir && strcmp(tilesetDir, "texpages/tertilesc3hw") == 0) // Rockies = 0xb6e1ec
 	{
 		pie_SetFogColour(WZCOL_FOG_ROCKIE);
 	}
@@ -321,12 +322,6 @@ void setDefaultFogColour()
 	{
 		pie_SetFogColour(WZCOL_FOG_ARIZONA);
 	}
-}
-
-void reInitPaletteAndFog()
-{
-	pal_Init();
-	setDefaultFogColour();
 }
 
 #define MIN_DROID_LIGHT_LEVEL	96

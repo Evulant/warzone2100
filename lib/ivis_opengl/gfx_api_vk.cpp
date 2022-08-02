@@ -1916,7 +1916,13 @@ int rateDeviceSuitability(const vk::PhysicalDevice &device, const vk::SurfaceKHR
 	// Discrete GPUs have a significant performance advantage
 	if (deviceProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
 	{
-		score += 100000; // picked a number greater than the max seen maxImageDimension2D value: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxImageDimension2D
+		score += 1000000; // picked a number greater than the max seen maxImageDimension2D value: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxImageDimension2D
+	}
+
+	// Integrated GPUs should still be preferred over CPU types
+	if (deviceProperties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu)
+	{
+		score += 100000; // picked a number greater than the max seen maxImageDimension2D value: https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxImageDimension2D (but less than the dedicated gpu number above)
 	}
 
 	// Maximum possible size of textures affects graphics quality
@@ -1987,6 +1993,15 @@ int rateDeviceSuitability(const vk::PhysicalDevice &device, const vk::SurfaceKHR
 	if (swapChainSupportDetails.formats.empty() || swapChainSupportDetails.presentModes.empty())
 	{
 		return 0;
+	}
+
+	if (deviceProperties.deviceType == vk::PhysicalDeviceType::eCpu && deviceProperties.vendorID == 0x10005)
+	{
+		if (strncmp("llvmpipe", deviceProperties.deviceName, strlen("llvmpipe")) == 0)
+		{
+			// allow llvmpipe, but prioritize it last
+			score = std::min<int>(1, score);
+		}
 	}
 
 	return score;
@@ -2846,6 +2861,12 @@ bool VkRoot::_initialize(const gfx_api::backend_Impl_Factory& impl, int32_t anti
 		return false;
 	}
 	physDeviceProps = physicalDevice.getProperties(vkDynLoader);
+	debug(LOG_3D, "Picking device: %s", physDeviceProps.deviceName.data());
+	debug(LOG_3D, "- apiVersion: %s", VkhInfo::vulkan_apiversion_to_string(physDeviceProps.apiVersion).c_str());
+	debug(LOG_3D, "- driverVersion: %" PRIu32, physDeviceProps.driverVersion);
+	debug(LOG_3D, "- vendorID: %" PRIu32, physDeviceProps.vendorID);
+	debug(LOG_3D, "- deviceID: %" PRIu32, physDeviceProps.deviceID);
+	debug(LOG_3D, "- deviceType: %s", to_string(physDeviceProps.deviceType).c_str());
 	formattedRendererInfoString = calculateFormattedRendererInfoString(); // must be called after physDeviceProps is populated
 	physDeviceFeatures = physicalDevice.getFeatures(vkDynLoader);
 	memprops = physicalDevice.getMemoryProperties(vkDynLoader);

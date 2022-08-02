@@ -69,7 +69,7 @@
 #include "cocoa_wz_menus.h"
 #endif
 
-#include <optional-lite/optional.hpp>
+#include <nonstd/optional.hpp>
 using nonstd::optional;
 using nonstd::nullopt;
 
@@ -2130,7 +2130,7 @@ static bool wzSDLOneTimeInitSubsystem(uint32_t subsystem_flag)
 	return true;
 }
 
-void wzSDLPreWindowCreate_InitOpenGLAttributes(bool antialiasing, bool useOpenGLES, bool useOpenGLESLibrary)
+void wzSDLPreWindowCreate_InitOpenGLAttributes(int antialiasing, bool useOpenGLES, bool useOpenGLESLibrary)
 {
 	// Set OpenGL attributes before creating the SDL Window
 

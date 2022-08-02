@@ -1,7 +1,5 @@
 cmake_minimum_required (VERSION 3.5)
 
-add_subdirectory(fonts)
-
 SET(UTF8PROC_INSTALL OFF CACHE BOOL "Enable installation of utf8proc" FORCE)
 add_subdirectory(utf8proc)
 set_property(TARGET utf8proc PROPERTY FOLDER "3rdparty")
@@ -61,5 +59,11 @@ set_property(TARGET glad PROPERTY FOLDER "3rdparty")
 target_link_libraries(glad PRIVATE ${CMAKE_DL_LIBS})
 target_include_directories(glad PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/glad/include")
 
-add_subdirectory(quickjs EXCLUDE_FROM_ALL)
+set(JSON_ImplicitConversions OFF CACHE BOOL "Enable implicit conversions." FORCE)
+set(JSON_SystemInclude ON CACHE BOOL "Include as system headers (skip for clang-tidy)." FORCE)
+add_subdirectory(json EXCLUDE_FROM_ALL)
+
+add_subdirectory(optional-lite EXCLUDE_FROM_ALL)
+
+add_subdirectory(quickjs-wz EXCLUDE_FROM_ALL)
 set_property(TARGET quickjs PROPERTY FOLDER "3rdparty")

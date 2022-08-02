@@ -179,12 +179,17 @@ int32_t featureDamage(FEATURE *psFeature, unsigned damage, WEAPON_CLASS weaponCl
 	}
 }
 
-
-/* Create a feature on the map */
 FEATURE *buildFeature(FEATURE_STATS *psStats, UDWORD x, UDWORD y, bool FromSave)
 {
+	const auto id = generateSynchronisedObjectId();
+	return buildFeature(psStats, x, y, FromSave, id);
+}
+
+/* Create a feature on the map */
+FEATURE *buildFeature(FEATURE_STATS *psStats, UDWORD x, UDWORD y, bool FromSave, uint32_t id)
+{
 	//try and create the Feature
-	FEATURE *psFeature = new FEATURE(generateSynchronisedObjectId(), psStats);
+	FEATURE *psFeature = new FEATURE(id, psStats);
 
 	if (psFeature == nullptr)
 	{
@@ -491,6 +496,7 @@ bool destroyFeature(FEATURE *psDel, unsigned impactTime)
 		// ----- Flip all the tiles under the skyscraper to a rubble tile
 		// smoke effect should disguise this happening
 		StructureBounds b = getStructureBounds(psDel);
+		bool isUrban = tilesetDir && strcmp(tilesetDir, "texpages/tertilesc2hw") == 0;
 		for (int breadth = 0; breadth < b.size.y; ++breadth)
 		{
 			for (int width = 0; width < b.size.x; ++width)
@@ -502,7 +508,10 @@ bool destroyFeature(FEATURE *psDel, unsigned impactTime)
 					if (terrainType(psTile) != TER_CLIFFFACE)
 					{
 						/* Clear feature bits */
-						psTile->texture = TileNumber_texture(psTile->texture) | RUBBLE_TILE;
+						if (isUrban)
+						{
+							psTile->texture = TileNumber_texture(psTile->texture) | RUBBLE_TILE;
+						}
 						auxClearBlocking(b.map.x + width, b.map.y + breadth, AUXBITS_ALL);
 					}
 					else
@@ -510,7 +519,10 @@ bool destroyFeature(FEATURE *psDel, unsigned impactTime)
 						/* This remains a blocking tile */
 						psTile->psObject = nullptr;
 						auxClearBlocking(b.map.x + width, b.map.y + breadth, AIR_BLOCKED);  // Shouldn't remain blocking for air units, however.
-						psTile->texture = TileNumber_texture(psTile->texture) | BLOCKING_RUBBLE_TILE;
+						if (isUrban)
+						{
+							psTile->texture = TileNumber_texture(psTile->texture) | BLOCKING_RUBBLE_TILE;
+						}
 					}
 				}
 			}

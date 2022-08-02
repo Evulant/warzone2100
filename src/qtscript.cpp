@@ -550,7 +550,7 @@ wzapi::scripting_instance* scripting_engine::loadPlayerScript(const WzString& pa
 
 
 	//== * ```difficulty``` The currently set campaign difficulty, or the current AI's difficulty setting. It will be one of
-	//== ```EASY```, ```MEDIUM```, ```HARD``` or ```INSANE```.
+	//== ```SUPEREASY``` (campaign only), ```EASY```, ```MEDIUM```, ```HARD``` or ```INSANE```.
 	if (game.type == LEVEL_TYPE::SKIRMISH)
 	{
 		globalVars["difficulty"] = static_cast<int8_t>(difficulty);
@@ -974,42 +974,43 @@ void jsShowDebug()
 //__
 //__ ## eventDesignBody()
 //__
-//__An event that is run when current user picks a body in the design menu.
+//__ An event that is run when current user picks a body in the design menu.
 //__
 //__ ## eventDesignPropulsion()
 //__
-//__An event that is run when current user picks a propulsion in the design menu.
+//__ An event that is run when current user picks a propulsion in the design menu.
 //__
 //__ ## eventDesignWeapon()
 //__
-//__An event that is run when current user picks a weapon in the design menu.
+//__ An event that is run when current user picks a weapon in the design menu.
 //__
 //__ ## eventDesignCommand()
 //__
-//__An event that is run when current user picks a command turret in the design menu.
+//__ An event that is run when current user picks a command turret in the design menu.
 //__
 //__ ## eventDesignSystem()
 //__
-//__An event that is run when current user picks a system other than command turret in the design menu.
+//__ An event that is run when current user picks a system other than command turret in the design menu.
 //__
 //__ ## eventDesignQuit()
 //__
-//__An event that is run when current user leaves the design menu.
+//__ An event that is run when current user leaves the design menu.
 //__
 //__ ## eventMenuBuildSelected()
 //__
-//__An event that is run when current user picks something new in the build menu.
+//__ An event that is run when current user picks something new in the build menu.
 //__
 //__ ## eventMenuBuild()
 //__
-//__An event that is run when current user opens the build menu.
+//__ An event that is run when current user opens the build menu.
 //__
 //__ ## eventMenuResearch()
 //__
-//__An event that is run when current user opens the research menu.
+//__ An event that is run when current user opens the research menu.
 //__
 //__ ## eventMenuManufacture()
-//__An event that is run when current user opens the manufacture menu.
+//__
+//__ An event that is run when current user opens the manufacture menu.
 //__
 bool triggerEvent(SCRIPT_TRIGGER_TYPE trigger, BASE_OBJECT *psObj)
 {
@@ -2016,9 +2017,18 @@ bool scripting_engine::loadLabels(const char *filename)
 		}
 		else if (list[i].startsWith("object"))
 		{
-			p.id = ini.value("id").toInt();
+			auto id = ini.value("id").toInt();
+			const auto player = ini.value("player").toInt();
+			const auto it = moduleToBuilding[player].find(id);
+			if (it != moduleToBuilding[player].end())
+			{
+				// replace moduleId with its building id
+				debug(LOG_NEVER, "replaced with %i;%i", id, it->second);
+				id = it->second;
+			}
+			p.id = id;
 			p.type = ini.value("type").toInt();
-			p.player = ini.value("player").toInt();
+			p.player = player;
 			p.triggered = ini.value("triggered", -1).toInt(); // deactivated by default
 			p.subscriber = ini.value("subscriber", ALL_PLAYERS).toInt();
 			labels[label] = p;
@@ -2112,9 +2122,11 @@ bool scripting_engine::writeLabels(const char *filename)
 		}
 		else
 		{
+			auto id = l.id;
+			auto player = l.player;
 			ini.beginGroup("object_" + WzString::number(c[4]++));
-			ini.setValue("id", l.id);
-			ini.setValue("player", l.player);
+			ini.setValue("id", id);
+			ini.setValue("player", player);
 			ini.setValue("type", l.type);
 			ini.setValue("label", WzString::fromUtf8(key));
 			ini.setValue("triggered", l.triggered);
@@ -2148,7 +2160,9 @@ bool scripting_engine::writeLabels(const char *filename)
 //-- Optionally add a filter on it in the second parameter, which can
 //-- be a specific player to watch for, or ```ALL_PLAYERS``` by default.
 //-- This is a fast operation of O(log n) algorithmic complexity. (3.2+ only)
+//--
 //-- ## resetArea(labelName[, playerFilter])
+//--
 //-- Reset the trigger on an area. Next time a unit enters the area, it will trigger
 //-- an area event. Optionally add a filter on it in the second parameter, which can
 //-- be a specific player to watch for, or ```ALL_PLAYERS``` by default.
@@ -2381,6 +2395,7 @@ optional<std::string> scripting_engine::_findMatchingLabel(wzapi::game_object_id
 	value.id = obj_id.id;
 	value.player = obj_id.player;
 	value.type = obj_id.type;
+	debug(LOG_NEVER, "looking for label %i;%i;%i", obj_id.id, obj_id.player, obj_id.type);
 	std::string label;
 	for (const auto &it : labels)
 	{

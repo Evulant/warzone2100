@@ -234,6 +234,26 @@ bool loadLevFile(const std::string& filename, searchPathMode pathMode, bool igno
 	return true;
 }
 
+bool loadLevFile_JSON(const std::string& mountPoint, const std::string& filename, searchPathMode pathMode, char const *realFileName)
+{
+	if (realFileName == nullptr)
+	{
+		debug(LOG_WZ, "Loading lev file: \"%s\", builtin\n", filename.c_str());
+	}
+	else
+	{
+		debug(LOG_WZ, "Loading lev file: \"%s\" from \"%s\"\n", filename.c_str(), realFileName);
+	}
+
+	if (!levParse_JSON(mountPoint, filename, pathMode, realFileName))
+	{
+		debug(LOG_ERROR, "Failed to load: %s\n", filename.c_str());
+		return false;
+	}
+
+	return true;
+}
+
 
 static void cleanSearchPath()
 {
@@ -387,7 +407,7 @@ static void clearInMemoryMapFile(void *pData)
  * Priority:
  * maps > mods > base > base.wz
  */
-bool rebuildSearchPath(searchPathMode mode, bool force, const char *current_map)
+bool rebuildSearchPath(searchPathMode mode, bool force, const char *current_map, const char* current_map_mount_point)
 {
 	static searchPathMode current_mode = mod_clean;
 	static std::string current_current_map;
@@ -529,12 +549,12 @@ bool rebuildSearchPath(searchPathMode mode, bool force, const char *current_map)
 					// mount it as a normal physical map path
 					WzString realPathAndDir = WzString::fromUtf8(PHYSFS_getRealDir(current_map)) + current_map;
 					realPathAndDir.replace("/", PHYSFS_getDirSeparator()); // Windows fix
-					PHYSFS_mount(realPathAndDir.toUtf8().c_str(), NULL, PHYSFS_APPEND);
+					PHYSFS_mount(realPathAndDir.toUtf8().c_str(), current_map_mount_point, PHYSFS_APPEND);
 				}
 				else if (!inMemoryMapArchiveData.empty())
 				{
 					// mount the in-memory map archive as a virtual file
-					if (PHYSFS_mountMemory_fixed(inMemoryMapArchiveData.data(), inMemoryMapArchiveData.size(), clearInMemoryMapFile, inMemoryMapVirtualFilenameUID.c_str(), NULL, PHYSFS_APPEND) != 0)
+					if (PHYSFS_mountMemory_fixed(inMemoryMapArchiveData.data(), inMemoryMapArchiveData.size(), clearInMemoryMapFile, inMemoryMapVirtualFilenameUID.c_str(), current_map_mount_point, PHYSFS_APPEND) != 0)
 					{
 						inMemoryMapArchiveMounted++;
 					}
@@ -675,18 +695,24 @@ static MapFileList listMapFiles()
 		std::string realFilePathAndName = PHYSFS_getWriteDir() + realFileName.platformDependent;
 		if (PHYSFS_mount(realFilePathAndName.c_str(), NULL, PHYSFS_APPEND))
 		{
-			int unsafe = 0;
-			bool enumSuccess = WZ_PHYSFS_enumerateFiles("multiplay/maps", [&unsafe, &realFilePathAndName](const char *file) -> bool {
+			size_t numMapGamFiles = 0;
+			size_t numMapFolders = 0;
+			bool enumSuccess = WZ_PHYSFS_enumerateFiles("multiplay/maps", [&numMapGamFiles, &numMapFolders, &realFilePathAndName](const char *file) -> bool {
 				std::string isDir = std::string("multiplay/maps/") + file;
 				if (WZ_PHYSFS_isDirectory(isDir.c_str()))
 				{
+					if (numMapFolders++ > 1)
+					{
+						debug(LOG_ERROR, "Map packs are not supported! %s NOT added.", realFilePathAndName.c_str());
+						return false; // break;
+					}
 					return true; // continue;
 				}
 				std::string checkfile = file;
 				debug(LOG_WZ, "checking ... %s", file);
 				if (checkfile.substr(checkfile.find_last_of('.') + 1) == "gam")
 				{
-					if (unsafe++ > 1)
+					if (numMapGamFiles++ > 1)
 					{
 						debug(LOG_ERROR, "Map packs are not supported! %s NOT added.", realFilePathAndName.c_str());
 						return false; // break;
@@ -698,9 +724,10 @@ static MapFileList listMapFiles()
 			{
 				// Failed to enumerate contents - corrupt map archive (ignore it)
 				debug(LOG_ERROR, "Failed to enumerate - ignoring corrupt map file: %s", realFilePathAndName.c_str());
-				unsafe = std::numeric_limits<int>::max() - 1;
+				numMapGamFiles = std::numeric_limits<size_t>::max() - 1;
+				numMapFolders = std::numeric_limits<size_t>::max() - 1;
 			}
-			if (unsafe < 2)
+			if (numMapGamFiles < 2 && numMapFolders < 2)
 			{
 				filtered.push_back(realFileName);
 			}
@@ -850,8 +877,48 @@ bool processMap(const char* archive, const char* realFileName_platformIndependen
 		return false;
 	}
 
+	WzMapPhysFSIO mapIO;
+
 	bool containsMap = false;
-	bool enumSuccess = WZ_PHYSFS_enumerateFiles(mountPoint.c_str(), [&](const char *file) -> bool {
+
+	// First pass: Look for new level.json (which are in multiplay/maps/<map name>)
+	std::string mapsDirPath = mapIO.pathJoin(mountPoint.c_str(), "multiplay/maps");
+	bool enumSuccess = WZ_PHYSFS_enumerateFolders(mapsDirPath, [&](const char *folder) -> bool {
+		if (!folder) { return true; }
+		if (*folder == '\0') { return true; }
+
+		std::string levelJSONPath = std::string("multiplay/maps/") + folder + "/level.json";
+		if (PHYSFS_exists(WzString::fromUtf8(mountPoint + "/" + levelJSONPath)) && loadLevFile_JSON(mountPoint, levelJSONPath, mod_multiplay, realFileName_platformIndependent))
+		{
+			containsMap = true;
+			return false; // stop enumerating
+		}
+		return true;
+	});
+	if (!enumSuccess)
+	{
+		// Failed to enumerate contents - corrupt map archive
+		return false;
+	}
+
+	// Or "flattened" self-contained maps (where level.json is in the root)
+	if (!containsMap)
+	{
+		if (PHYSFS_exists(WzString::fromUtf8(mountPoint + "/" + "level.json")) && loadLevFile_JSON(mountPoint, "level.json", mod_multiplay, realFileName_platformIndependent))
+		{
+			containsMap = true;
+		}
+	}
+
+	if (containsMap)
+	{
+		std::string MapName = realFileName_platformIndependent;
+		WZ_Maps.insert(WZMapInfo_Map::value_type(MapName, WZmapInfoResult.value()));
+		return true;
+	}
+
+	// Second pass: Look for older / classic maps (with *.addon.lev / *.xplayers.lev in the root)
+	enumSuccess = WZ_PHYSFS_enumerateFiles(mountPoint.c_str(), [&](const char *file) -> bool {
 		size_t len = strlen(file);
 		if ((len > 10 && !strcasecmp(file + (len - 10), ".addon.lev"))  // Do not add addon.lev again // <--- Err, what? The code has loaded .addon.lev for a while...
 			|| (len > 13 && !strcasecmp(file + (len - 13), ".xplayers.lev"))) // add support for X player maps using a new name to prevent conflicts.
@@ -866,22 +933,20 @@ bool processMap(const char* archive, const char* realFileName_platformIndependen
 		return true; // continue
 	});
 
-	if (!containsMap)
-	{
-		// not sure what this is, but it doesn't seem to contain a map
-		return false;
-	}
-
 	if (!enumSuccess)
 	{
 		// Failed to enumerate contents - corrupt map archive
 		return false;
 	}
 
-	std::string MapName = realFileName_platformIndependent;
-	WZ_Maps.insert(WZMapInfo_Map::value_type(MapName, WZmapInfoResult.value()));
+	if (containsMap)
+	{
+		std::string MapName = realFileName_platformIndependent;
+		WZ_Maps.insert(WZMapInfo_Map::value_type(MapName, WZmapInfoResult.value()));
+		return true;
+	}
 
-	return true;
+	return false;
 }
 
 #if defined(HAS_PHYSFS_IO_SUPPORT)
@@ -1204,6 +1269,7 @@ bool frontendShutdown()
 
 	//do this before shutting down the iV library
 	resReleaseAllData();
+	frontendIsShuttingDown();
 
 	if (!objShutdown())
 	{

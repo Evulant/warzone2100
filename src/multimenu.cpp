@@ -28,7 +28,7 @@
 #include "lib/framework/physfs_ext.h"
 #include "lib/widget/gridlayout.h"
 #include "lib/widget/alignment.h"
-#include "lib/widget/minsize.h"
+#include "lib/widget/resize.h"
 #include "lib/widget/margin.h"
 #include "lib/widget/button.h"
 #include "lib/widget/label.h"
@@ -115,6 +115,8 @@ static const unsigned M_REQUEST_NP[] = {M_REQUEST_2P,    M_REQUEST_3P,    M_REQU
 #define M_REQUEST_BUT	(MULTIMENU+100)		// allow loads of buttons.
 #define M_REQUEST_BUTM	(MULTIMENU+1100)
 
+#define MULTIMENU_PLAYER_MUTE_START M_REQUEST_BUTM + 1
+
 #define M_REQUEST_X		MULTIOP_PLAYERSX
 #define M_REQUEST_Y		MULTIOP_PLAYERSY
 #define M_REQUEST_W		MULTIOP_PLAYERSW
@@ -178,7 +180,7 @@ public:
 	}
 	void setCachedText(const std::string &text, iV_fonts fontID, const std::string &fullButString, int widgetWidth)
 	{
-		wzText.setText(text, fontID);
+		wzText.setText(WzString::fromUtf8(text), fontID);
 		_fullButString = fullButString;
 		_widgetWidth = widgetWidth;
 	}
@@ -679,6 +681,31 @@ static void displayChannelState(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset
 	psWidget->UserData = player;
 }
 
+static void displayMuteState(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
+{
+	UDWORD player = psWidget->UserData;
+	ASSERT_OR_RETURN(, player < MAX_CONNECTED_PLAYERS, "invalid player: %" PRIu32 "", player);
+
+	UWORD ImageID = IMAGE_INTFAC_VOLUME_UP;
+	if (!ingame.muteChat[player])
+	{
+		ImageID = IMAGE_INTFAC_VOLUME_UP;
+	}
+	else
+	{
+		ImageID = IMAGE_INTFAC_VOLUME_MUTE;
+	}
+	int x = xOffset + psWidget->x();
+	int y = yOffset + psWidget->y();
+	bool isHighlighted = (psWidget->getState() & WBUT_HIGHLIGHT) != 0;
+	bool isDown = (psWidget->getState() & WBUT_DOWN) != 0;
+	if (isHighlighted || isDown)
+	{
+		pie_UniTransBoxFill(x-2, y-2, x + 16 + 4, y + 16 + 4, (isDown) ? WZCOL_TRANSPARENT_BOX : pal_RGBA(255, 255, 255, 65));
+	}
+	iV_DrawImageFileAnisotropic(IntImages, ImageID, x + 1, y + 1, Vector2f{16,16});
+}
+
 
 // ////////////////////////////////////////////////////////////////////////////
 
@@ -774,12 +801,13 @@ private:
 		structsLabel = makeLabel(_("Structs"));
 		place({0}, {0}, margin.wrap(Alignment::center().wrap(timerLabel)));
 		place({1}, {0}, margin.wrap(makeLabel(_("Alliances"))));
-		place({2}, {0}, MinSize::minWidth(100).wrap(margin.wrap(makeLabel(_("Score")))));
-		place({3}, {0}, MinSize::minWidth(50).wrap(margin.wrap(makeLabel(_("Kills")))));
-		place({4}, {0}, MinSize::minWidth(50).wrap(margin.wrap(makeLabel(_("Units")))));
-		place({5}, {0}, MinSize::minWidth(50).wrap(lastMargin.wrap(powerLabel)));
-		place({5}, {0}, MinSize::minWidth(50).wrap(lastMargin.wrap(pingLabel)));
-		place({5}, {0}, MinSize::minWidth(50).wrap(lastMargin.wrap(structsLabel)));
+		place({2}, {0}, Resize::width(100).wrap(margin.wrap(makeLabel(_("Score")))));
+		place({3}, {0}, Resize::width(50).wrap(margin.wrap(makeLabel(_("Kills")))));
+		place({4}, {0}, Resize::width(50).wrap(margin.wrap(makeLabel(_("Units")))));
+		place({5}, {0}, Resize::width(50).wrap(lastMargin.wrap(powerLabel)));
+		place({5}, {0}, Resize::width(50).wrap(lastMargin.wrap(pingLabel)));
+		place({5}, {0}, Resize::width(50).wrap(lastMargin.wrap(structsLabel)));
+		place({6}, {0}, Resize::width(16).wrap(lastMargin.wrap(makeLabel(""))));
 
 		for (auto player = 0; player < MAX_CONNECTED_PLAYERS; player++)
 		{
@@ -809,7 +837,7 @@ private:
 	{
 		auto nameGrid = std::make_shared<GridLayout>();
 		char name[128];
-		ssprintf(name, "%d: %s", NetPlay.players[player].position, getPlayerName(player));
+		ssprintf(name, "%d: %s", NetPlay.players[player].position, getPlayerName(player, true));
 		nameGrid->place({0, 1, false}, {0}, std::make_shared<MultiMenuDroidView>(player));
 		auto nameLabel = makeLabel(name);
 		nameGrid->place({1}, {0}, nameLabel);
@@ -899,6 +927,31 @@ private:
 			lastColumnLabel,
 		});
 
+		// chat mute button
+		std::shared_ptr<WIDGET> muteWidget;
+		if (player != selectedPlayer)
+		{
+			W_BUTINIT sButInit;
+			sButInit.id		= MULTIMENU_PLAYER_MUTE_START + player;
+			sButInit.pTip	= _("Toggle Chat Mute");
+			sButInit.pDisplay = displayMuteState;
+			sButInit.UserData = player;
+			sButInit.width	= 18;
+			sButInit.height = 18;
+			auto muteButton = std::make_shared<W_BUTTON>(&sButInit);
+			muteButton->addOnClickHandler([](W_BUTTON& button) {
+				auto playerIdx = button.UserData;
+				ASSERT_OR_RETURN(, playerIdx < MAX_CONNECTED_PLAYERS, "Invalid playerIdx: %" PRIu32, playerIdx);
+				setPlayerMuted(playerIdx, !ingame.muteChat[playerIdx]);
+			});
+			muteWidget = muteButton;
+		}
+		else
+		{
+			muteWidget = std::make_shared<WIDGET>();
+			muteWidget->setGeometry(0, 0, 0, 0);
+		}
+
 		Margin margin(0, CELL_HORIZONTAL_PADDING);
 		place({0}, {row}, Margin(0, CELL_HORIZONTAL_PADDING, 0, 0).wrap(nameGrid));
 		place({1}, {row}, margin.wrap(Alignment::center().wrap(alliancesGrid)));
@@ -906,6 +959,7 @@ private:
 		place({3}, {row}, margin.wrap(killsLabel));
 		place({4}, {row}, margin.wrap(unitsLabel));
 		place({5}, {row}, margin.wrap(lastColumnLabel));
+		place({6}, {row}, margin.wrap(Alignment::center().wrap(muteWidget)));
 	}
 
 	void updatePlayersWidgets()
@@ -934,25 +988,15 @@ private:
 			char lastString[20] = {0};
 
 			// Let's use the real score for MP games
-			if (NetPlay.bComms)
+			if (Cheated && NetPlay.bComms)
 			{
-				if (Cheated)
-				{
-					sstrcpy(scoreString, "(cheated)");
-				}
-				else
-				{
-					ssprintf(scoreString, "%d", getMultiStats(playerWidget.player).recentScore);
-				}
-
-				ssprintf(killsString, "%d", getMultiStats(playerWidget.player).recentKills);
+				sstrcpy(scoreString, "(cheated)");
 			}
 			else
 			{
-				// estimate of scores and kills for skirmish games
-				ssprintf(scoreString, "%d", ingame.skScores[playerWidget.player][0]);
-				ssprintf(killsString, "%d", ingame.skScores[playerWidget.player][1]);
+				ssprintf(scoreString, "%d", getMultiStats(playerWidget.player).recentScore);
 			}
+			ssprintf(killsString, "%d", getMultiStats(playerWidget.player).recentKills);
 
 			//only show player's and allies' unit counts, and nobody elses.
 			if (isAlly || gInputManager.debugManager().debugMappingsAllowed())
@@ -1070,6 +1114,7 @@ public:
 			glm::ivec4(x0 + columns[3], y0, x0 + columns[3], y0 + height()),
 			glm::ivec4(x0 + columns[4], y0, x0 + columns[4], y0 + height()),
 			glm::ivec4(x0 + columns[5], y0, x0 + columns[5], y0 + height()),
+			glm::ivec4(x0 + columns[6], y0, x0 + columns[6], y0 + height()),
 		};
 
 		iV_Lines(lines, WZCOL_BLACK);

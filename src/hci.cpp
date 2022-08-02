@@ -320,7 +320,7 @@ void setReticuleFlash(int ButId, bool flash)
 // set up the button's size & hit-testing based on the dimensions of the "normal" image
 void setReticuleButtonDimensions(W_BUTTON &button, const WzString &filename)
 {
-	ImageDef *image = nullptr;
+	AtlasImageDef *image = nullptr;
 	if (!filename.isEmpty())
 	{
 		image = iV_GetImage(filename);
@@ -1322,7 +1322,7 @@ INT_RETVAL intRunWidgets()
 				char msg[256] = {'\0'};
 
 				sstrcpy(msg, _("GAME SAVED: "));
-				sstrcat(msg, saveGameName);
+				sstrcat(msg, savegameWithoutExtension(saveGameName));
 				addConsoleMessage(msg, LEFT_JUSTIFY, NOTIFY_MESSAGE);
 
 				if (widgGetFromID(psWScreen, IDMISSIONRES_SAVE))
@@ -1699,10 +1699,10 @@ INT_RETVAL intRunWidgets()
 					auto psBuilding = castStructureStats(psPositionStats);
 					if (psBuilding && selectedPlayer < MAX_PLAYERS)
 					{
-						STRUCTURE tmp(0, selectedPlayer);
 
 						if (psBuilding->type == REF_DEMOLISH)
 						{
+							STRUCTURE tmp(0, selectedPlayer);
 							MAPTILE *psTile = mapTile(map_coord(pos.x), map_coord(pos.y));
 							FEATURE *psFeature = (FEATURE *)psTile->psObject;
 							STRUCTURE *psStructure = (STRUCTURE *)psTile->psObject;
@@ -1719,8 +1719,8 @@ INT_RETVAL intRunWidgets()
 						}
 						else
 						{
+							STRUCTURE tmp(generateNewObjectId(), selectedPlayer);
 							STRUCTURE *psStructure = &tmp;
-							tmp.id = generateNewObjectId();
 							tmp.pStructureType = (STRUCTURE_STATS *)psPositionStats;
 							tmp.pos = {pos.x, pos.y, map_Height(pos.x, pos.y) + world_coord(1) / 10};
 
@@ -2160,11 +2160,11 @@ void makeObsoleteButton(const std::shared_ptr<WIDGET> &parent)
 	obsoleteButton->id = IDSTAT_OBSOLETE_BUTTON;
 	obsoleteButton->style |= WBUT_SECONDARY;
 	obsoleteButton->setChoice(includeRedundantDesigns);
-	obsoleteButton->setImages(false, MultipleChoiceButton::Images(Image(IntImages, IMAGE_OBSOLETE_HIDE_UP), Image(IntImages, IMAGE_OBSOLETE_HIDE_UP), Image(IntImages, IMAGE_OBSOLETE_HIDE_HI)));
+	obsoleteButton->setImages(false, MultipleChoiceButton::Images(AtlasImage(IntImages, IMAGE_OBSOLETE_HIDE_UP), AtlasImage(IntImages, IMAGE_OBSOLETE_HIDE_UP), AtlasImage(IntImages, IMAGE_OBSOLETE_HIDE_HI)));
 	obsoleteButton->setTip(false, _("Hiding Obsolete Tech"));
-	obsoleteButton->setImages(true,  MultipleChoiceButton::Images(Image(IntImages, IMAGE_OBSOLETE_SHOW_UP), Image(IntImages, IMAGE_OBSOLETE_SHOW_UP), Image(IntImages, IMAGE_OBSOLETE_SHOW_HI)));
+	obsoleteButton->setImages(true,  MultipleChoiceButton::Images(AtlasImage(IntImages, IMAGE_OBSOLETE_SHOW_UP), AtlasImage(IntImages, IMAGE_OBSOLETE_SHOW_UP), AtlasImage(IntImages, IMAGE_OBSOLETE_SHOW_HI)));
 	obsoleteButton->setTip(true, _("Showing Obsolete Tech"));
-	obsoleteButton->move(4 + Image(IntImages, IMAGE_FDP_UP).width() + 4, STAT_SLDY);
+	obsoleteButton->move(4 + AtlasImage(IntImages, IMAGE_FDP_UP).width() + 4, STAT_SLDY);
 }
 
 /* Add the stats widgets to the widget screen */

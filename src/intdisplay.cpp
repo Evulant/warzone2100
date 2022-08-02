@@ -81,7 +81,7 @@
 //the loop default value
 #define DEFAULT_LOOP		1
 
-static void StatGetResearchImage(BASE_STATS *psStat, Image *image, iIMDShape **Shape, BASE_STATS **ppGraphicData, bool drawTechIcon);
+static void StatGetResearchImage(BASE_STATS *psStat, AtlasImage *image, iIMDShape **Shape, BASE_STATS **ppGraphicData, bool drawTechIcon);
 
 
 static int FormOpenAudioID;	// ID of sfx to play when form opens.
@@ -179,7 +179,6 @@ void PowerBar::display(int xOffset, int yOffset)
 	SDWORD		Empty;
 	SDWORD		BarWidth, textWidth = 0;
 	SDWORD		iX, iY;
-	static char		szVal[8];
 
 	double desiredPower = getPowerMinusQueued(selectedPlayer);
 	static double displayPower;
@@ -193,9 +192,8 @@ void PowerBar::display(int xOffset, int yOffset)
 	ManuPower = 0;
 
 	BarWidth = this->width();
-	sprintf(szVal, "%d", realPower);
 
-	cache.wzText.setText(szVal, font_regular);
+	cache.wzText.setText(WzString::number(realPower), font_regular);
 
 	textWidth = cache.wzText.width();
 	BarWidth -= textWidth;
@@ -386,7 +384,7 @@ void IntStatusButton::display(int xOffset, int yOffset)
 	UDWORD              compID;
 	bool	            bOnHold = false;
 	ImdObject object;
-	Image image;
+	AtlasImage image;
 
 	initDisplay();
 
@@ -557,7 +555,7 @@ void IntObjectButton::display(int xOffset, int yOffset)
 		}
 	}
 
-	displayIMD(Image(), object, xOffset, yOffset);
+	displayIMD(AtlasImage(), object, xOffset, yOffset);
 	displayIfHighlight(xOffset, yOffset);
 }
 
@@ -576,7 +574,7 @@ void IntStatsButton::display(int xOffset, int yOffset)
 	initDisplay();
 
 	ImdObject object;
-	Image image;
+	AtlasImage image;
 
 	if (Stat)
 	{
@@ -951,7 +949,7 @@ void IntFancyButton::displayClear(int xOffset, int yOffset)
 }
 
 // Create a button by rendering an IMD object into it.
-void IntFancyButton::displayIMD(Image image, ImdObject imdObject, int xOffset, int yOffset)
+void IntFancyButton::displayIMD(AtlasImage image, ImdObject imdObject, int xOffset, int yOffset)
 {
 	if (imdObject.empty())
 	{
@@ -1246,7 +1244,7 @@ void IntFancyButton::displayIMD(Image image, ImdObject imdObject, int xOffset, i
 }
 
 // Create a button by rendering an image into it.
-void IntFancyButton::displayImage(Image image, int xOffset, int yOffset)
+void IntFancyButton::displayImage(AtlasImage image, int xOffset, int yOffset)
 {
 	if (image.isNull())
 	{
@@ -1593,11 +1591,11 @@ bool StatIsResearch(BASE_STATS *Stat)
 	return Stat->hasType(STAT_RESEARCH);
 }
 
-static void StatGetResearchImage(BASE_STATS *psStat, Image *image, iIMDShape **Shape, BASE_STATS **ppGraphicData, bool drawTechIcon)
+static void StatGetResearchImage(BASE_STATS *psStat, AtlasImage *image, iIMDShape **Shape, BASE_STATS **ppGraphicData, bool drawTechIcon)
 {
 	if (drawTechIcon && ((RESEARCH *)psStat)->iconID != NO_RESEARCH_ICON)
 	{
-		*image = Image(IntImages, ((RESEARCH *)psStat)->iconID);
+		*image = AtlasImage(IntImages, ((RESEARCH *)psStat)->iconID);
 	}
 	//if the research has a Stat associated with it - use this as display in the button
 	if (((RESEARCH *)psStat)->psStat)
@@ -1648,7 +1646,7 @@ void IntTransportButton::display(int xOffset, int yOffset)
 	ASSERT(psDroid != nullptr, "Invalid droid pointer");
 
 	initDisplay();
-	displayIMD(Image(), ImdObject::Droid(psDroid), xOffset, yOffset);
+	displayIMD(AtlasImage(), ImdObject::Droid(psDroid), xOffset, yOffset);
 	displayIfHighlight(xOffset, yOffset);
 
 	if (psDroid)
@@ -1939,7 +1937,7 @@ void intDisplayUpdateAllyBar(W_BARGRAPH *psBar, const RESEARCH &research, const 
 	else if (bestCompletion > 0)
 	{
 		// Waiting for module...
-		psBar->text = std::string("—*—");
+		psBar->text = WzString("—*—");
 	}
 	else if (bestPowerNeeded != researchNotStarted)
 	{

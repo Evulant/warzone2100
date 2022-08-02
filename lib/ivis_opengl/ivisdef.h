@@ -36,6 +36,7 @@
 
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 
 //*************************************************************************
@@ -157,6 +158,8 @@ struct iIMDShape
 
 	int interpolate = 1; // if the model wants to be interpolated
 
+	std::string modelName;
+
 	iIMDShape *next = nullptr;  // next pie in multilevel pies (NULL for non multilevel !)
 };
 
@@ -167,7 +170,7 @@ struct iIMDShape
 //
 //*************************************************************************
 
-struct ImageDef
+struct AtlasImageDef
 {
 	size_t TPageID;   /**< Which associated file to read our info from */
 	unsigned int Tu;        /**< First vertex coordinate */
@@ -181,7 +184,7 @@ struct ImageDef
 	gfx_api::gfxFloat invTextureSize;
 };
 
-struct Image;
+struct AtlasImage;
 
 struct IMAGEFILE
 {
@@ -191,16 +194,17 @@ struct IMAGEFILE
 		int size;  /// Size of texture in pixels. (Should be square.)
 	};
 
-	Image find(std::string const &name);  // Defined in bitimage.cpp.
+	~IMAGEFILE(); // Defined in bitimage.cpp.
+	AtlasImageDef* find(WzString const &name);  // Defined in bitimage.cpp.
 
 	std::vector<Page> pages;          /// Texture pages.
-	std::vector<ImageDef> imageDefs;  /// Stored images.
-	std::vector<std::pair<std::string, int>> imageNames;  ///< Names of images, sorted by name. Can lookup indices from name.
+	std::vector<AtlasImageDef> imageDefs;  /// Stored images.
+	std::unordered_map<WzString, AtlasImageDef *> imageNamesMap; // Names of images -> AtlasImageDef
 };
 
-struct Image
+struct AtlasImage
 {
-	Image(IMAGEFILE const *images = nullptr, unsigned id = 0) : images(const_cast<IMAGEFILE *>(images)), id(id) {}
+	AtlasImage(IMAGEFILE const *images = nullptr, unsigned id = 0) : images(const_cast<IMAGEFILE *>(images)), id(id) {}
 
 	bool isNull() const
 	{

@@ -189,14 +189,20 @@ void DropdownWidget::display(int xOffset, int yOffset)
 
 void DropdownWidget::addItem(const std::shared_ptr<WIDGET> &item)
 {
-	auto itemOnSelect = [this](std::shared_ptr<DropdownItemWrapper> selected) {
-		if (!overlayScreen) {
-			open();
+	std::weak_ptr<DropdownWidget> pWeakThis(std::dynamic_pointer_cast<DropdownWidget>(shared_from_this()));
+	size_t newItemIndex = items.size();
+	auto itemOnSelect = [newItemIndex, pWeakThis](std::shared_ptr<DropdownItemWrapper> selected) {
+		auto psStrongDropdown = pWeakThis.lock();
+		ASSERT_OR_RETURN(, psStrongDropdown != nullptr, "DropdownWidget no longer exists?");
+		if (!psStrongDropdown->overlayScreen) {
+			psStrongDropdown->open();
 			return;
 		}
 
-		select(selected);
-		close();
+		if (psStrongDropdown->select(selected, newItemIndex))
+		{
+			psStrongDropdown->close();
+		}
 	};
 
 	auto wrapper = DropdownItemWrapper::make(item, itemOnSelect);

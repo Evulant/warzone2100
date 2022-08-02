@@ -39,11 +39,11 @@
 #include <string>
 #include <chrono>
 
-#include <optional-lite/optional.hpp>
+#include <nonstd/optional.hpp>
 using nonstd::optional;
 using nonstd::nullopt;
 
-#include <3rdparty/json/json_fwd.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 class DROID_GROUP;
 struct BASE_OBJECT;
@@ -82,6 +82,11 @@ struct MULTISTRUCTLIMITS
 {
 	uint32_t        id;
 	uint32_t        limit;
+
+	inline bool operator==(const MULTISTRUCTLIMITS& a) const
+	{
+		return (id == a.id && limit == a.limit);
+	}
 };
 
 // The side we are *configured* as. Used to indicate whether we are the server or the client. Note that when
@@ -110,6 +115,7 @@ struct MULTIPLAYERINGAME
 	std::chrono::steady_clock::time_point lastLagCheck;
 	optional<std::chrono::steady_clock::time_point> lastSentPlayerDataCheck2[MAX_CONNECTED_PLAYERS] = {};
 	std::chrono::steady_clock::time_point lastPlayerDataCheck2;
+	bool				muteChat[MAX_CONNECTED_PLAYERS] = {false};
 	std::vector<MULTISTRUCTLIMITS> structureLimits;
 	uint8_t				flags;  ///< Bitmask, shows which structures are disabled.
 #define MPFLAGS_NO_TANKS	0x01  		///< Flag for tanks disabled
@@ -119,7 +125,6 @@ struct MULTIPLAYERINGAME
 #define MPFLAGS_NO_LASSAT	0x10  		///< Flag for Laser Satellite Command Post disabled
 #define MPFLAGS_FORCELIMITS	0x20  		///< Flag to force structure limits
 #define MPFLAGS_MAX		0x3f
-	SDWORD		skScores[MAX_PLAYERS][2];			// score+kills for local skirmish players.
 	std::vector<MULTISTRUCTLIMITS> lastAppliedStructureLimits;	// a bit of a hack to retain the structureLimits used when loading / starting a game
 };
 
@@ -155,7 +160,7 @@ extern MULTIPLAYERINGAME	ingame;						// the game description.
 
 extern bool bMultiPlayer;				// true when more than 1 player.
 extern bool bMultiMessages;				// == bMultiPlayer unless multi messages are disabled
-extern bool openchannels[MAX_CONNECTED_PLAYERS];
+extern bool openchannels[MAX_CONNECTED_PLAYERS]; // outgoing message channels (i.e. who you are willing to send messages to)
 extern UBYTE bDisplayMultiJoiningStatus;	// draw load progress?
 
 #define RUN_ONLY_ON_SIDE(_side) \
@@ -197,6 +202,8 @@ extern UBYTE bDisplayMultiJoiningStatus;	// draw load progress?
 #define TECH_4					4
 
 #define MAX_KICK_REASON			80			// max array size for the reason your kicking someone
+
+#define CLEAR_ALL_NAMES         -1
 // functions
 
 WZ_DECL_WARN_UNUSED_RESULT BASE_OBJECT		*IdToPointer(UDWORD id, UDWORD player);
@@ -206,8 +213,9 @@ WZ_DECL_WARN_UNUSED_RESULT DROID			*IdToMissionDroid(UDWORD id, UDWORD player);
 WZ_DECL_WARN_UNUSED_RESULT FEATURE		*IdToFeature(UDWORD id, UDWORD player);
 WZ_DECL_WARN_UNUSED_RESULT DROID_TEMPLATE	*IdToTemplate(UDWORD tempId, UDWORD player);
 
-const char *getPlayerName(int player);
+const char *getPlayerName(int player, bool storedName = false);
 bool setPlayerName(int player, const char *sName);
+void clearPlayerName(unsigned int player);
 const char *getPlayerColourName(int player);
 bool isHumanPlayer(int player);				//to tell if the player is a computer or not.
 bool myResponsibility(int player);
@@ -312,6 +320,9 @@ void sendSyncRequest(int32_t req_id, int32_t x, int32_t y, const BASE_OBJECT *ps
 bool sendBeaconToPlayer(SDWORD locX, SDWORD locY, SDWORD forPlayer, SDWORD sender, const char *beaconMsg);
 MESSAGE *findBeaconMsg(UDWORD player, SDWORD sender);
 VIEWDATA *CreateBeaconViewData(SDWORD sender, UDWORD LocX, UDWORD LocY);
+
+void setPlayerMuted(uint32_t playerIdx, bool muted);
+bool isPlayerMuted(uint32_t sender);
 
 bool makePlayerSpectator(uint32_t player_id, bool removeAllStructs = false, bool quietly = false);
 

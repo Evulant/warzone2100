@@ -98,8 +98,8 @@ static char	sCurrentConsoleText[MAX_CONSOLE_STRING_LENGTH];			//remember what us
 #define QUICKSAVE_SKI_FOLDER "savegames/skirmish/QuickSave"
 #define QUICKSAVE_CAM_FILENAME "savegames/campaign/QuickSave.gam"
 #define QUICKSAVE_SKI_FILENAME "savegames/skirmish/QuickSave.gam"
-#define QUICKSAVE_CAM_JSON_FILENAME QUICKSAVE_CAM_FOLDER "/QuickSave.json"
-#define QUICKSAVE_SKI_JSON_FILENAME QUICKSAVE_SKI_FOLDER "/QuickSave.json"
+#define QUICKSAVE_CAM_JSON_FILENAME QUICKSAVE_CAM_FOLDER "/gam.json"
+#define QUICKSAVE_SKI_JSON_FILENAME QUICKSAVE_SKI_FOLDER "/gam.json"
 
 #define SPECTATOR_NO_OP() do { if (selectedPlayer >= MAX_PLAYERS || NetPlay.players[selectedPlayer].isSpectator) { return; } } while (0)
 
@@ -729,6 +729,29 @@ void kf_ShowNumObjects()
 	          selectedPlayer, droids, structures, features);
 	sendInGameSystemMessage(cmsg.c_str());
 }
+
+
+void kf_ListDroids()
+{
+	// Bail out if we're running a _true_ multiplayer game (to prevent MP cheating)
+	debug(LOG_INFO, "list droids:");
+	if (runningMultiplayer())
+	{
+		noMPCheatMsg();
+		return;
+	}
+	for (int i = 0; i < MAX_PLAYERS; i++)
+	{
+		for (DROID *psDroid = apsDroidLists[i]; psDroid; psDroid = psDroid->psNext)
+		{
+			const auto x = map_coord(psDroid->pos.x);
+			const auto y = map_coord(psDroid->pos.y);
+			debug(LOG_INFO, "droid %i;%s;%i;%i;%i", i, psDroid->aName, psDroid->droidType, x, y);
+		}
+	}
+	
+}
+
 
 // --------------------------------------------------------------------------
 
@@ -1408,6 +1431,9 @@ void	kf_TogglePauseMode()
 
 			switch (lev)
 			{
+				case DL_SUPER_EASY:
+					addConsoleMessage(_("DIFFICULTY: SUPER EASY"), CENTRE_JUSTIFY, SYSTEM_MESSAGE);
+					break;
 				case DL_EASY:
 					addConsoleMessage(_("DIFFICULTY: EASY"), CENTRE_JUSTIFY, SYSTEM_MESSAGE);
 					break;
@@ -2308,7 +2334,7 @@ static void tryChangeSpeed(Rational newMod, Rational oldMod)
 
 	// only in debug/cheat mode do we enable all time compression speeds.
 	const DebugInputManager& dbgInputManager = gInputManager.debugManager();
-	if (!dbgInputManager.debugMappingsAllowed() && (newMod >= 2 || newMod <= 0))  // 2 = max officially allowed time compression
+	if (!dbgInputManager.debugMappingsAllowed() && (newMod > 2 || newMod <= 0))  // 2 = max officially allowed time compression
 	{
 		return;
 	}
@@ -2549,8 +2575,8 @@ void kf_QuickSave()
 		return;
 	}
 
-	const char *filename = bMultiPlayer? QUICKSAVE_SKI_FILENAME : QUICKSAVE_CAM_FILENAME;
-	const char *quickSaveFolder = bMultiPlayer? QUICKSAVE_SKI_FOLDER : QUICKSAVE_CAM_FOLDER;
+	const char *filename = bMultiPlayer ? QUICKSAVE_SKI_FILENAME : QUICKSAVE_CAM_FILENAME;
+	const char *quickSaveFolder = bMultiPlayer ? QUICKSAVE_SKI_FOLDER : QUICKSAVE_CAM_FOLDER;
 	if (WZ_PHYSFS_isDirectory(quickSaveFolder))
 	{
 		deleteSaveGame(quickSaveFolder);
@@ -2578,9 +2604,9 @@ void kf_QuickLoad()
 		return;
 	}
 
-	const char *filename = bMultiPlayer? QUICKSAVE_SKI_FILENAME : QUICKSAVE_CAM_FILENAME;
+	const char *filename = bMultiPlayer ? QUICKSAVE_SKI_FILENAME : QUICKSAVE_CAM_FILENAME;
 	// check for .json version, because that's what going to be loaded anyway
-	if (PHYSFS_exists(filename) || PHYSFS_exists(bMultiPlayer? QUICKSAVE_SKI_JSON_FILENAME : QUICKSAVE_CAM_JSON_FILENAME))
+	if (PHYSFS_exists(filename) || PHYSFS_exists(bMultiPlayer ? QUICKSAVE_SKI_JSON_FILENAME : QUICKSAVE_CAM_JSON_FILENAME))
 	{
 		console(_("QuickLoad"));
 		audio_StopAll();

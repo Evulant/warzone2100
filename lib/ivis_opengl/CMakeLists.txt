@@ -50,6 +50,7 @@ file(GLOB SRC
 find_package(PNG 1.2 REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(Harfbuzz 1.0 REQUIRED)
+find_package(Fribidi) # recommended, but optional
 
 include(CheckCXXCompilerFlag)
 
@@ -57,12 +58,22 @@ add_library(ivis-opengl STATIC ${HEADERS} ${SRC})
 set_property(TARGET ivis-opengl PROPERTY FOLDER "lib")
 include(WZTargetConfiguration)
 WZ_TARGET_CONFIGURATION(ivis-opengl)
+
 target_include_directories(ivis-opengl PRIVATE ${HARFBUZZ_INCLUDE_DIRS} ${FREETYPE_INCLUDE_DIR_ft2build})
 target_link_libraries(ivis-opengl PRIVATE framework PNG::PNG ${HARFBUZZ_LIBRARIES} ${FREETYPE_LIBRARIES})
 target_link_libraries(ivis-opengl PUBLIC glad)
+target_link_libraries(ivis-opengl PUBLIC optional-lite)
+if (Fribidi_FOUND)
+	target_include_directories(ivis-opengl PRIVATE ${FRIBIDI_INCLUDE_DIRS})
+	target_link_libraries(ivis-opengl PRIVATE ${FRIBIDI_LIBRARIES})
+	target_compile_definitions(ivis-opengl PRIVATE "-DWZ_FRIBIDI_ENABLED")
+else()
+	message(WARNING "Fribidi not found - WZ will be compiled *without* Fribidi support")
+endif()
+
 if(WZ_ENABLE_BACKEND_VULKAN)
 	find_package(VulkanHeaders 148) # minimum supported version of the Vulkan headers is 148
-	set(_vulkanheaders_dl_gittag "sdk-1.2.162.0")
+	set(_vulkanheaders_dl_gittag "sdk-1.2.198.0")
 	if((NOT VulkanHeaders_FOUND AND NOT ${CMAKE_VERSION} VERSION_LESS "3.11.0") AND (NOT WZ_DISABLE_FETCHCONTENT_GIT_CLONE))
 		# Fetch newer Vulkan headers (using FetchContent, which requires CMake 3.11+)
 		include(FetchContent)

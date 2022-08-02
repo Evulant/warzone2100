@@ -1018,7 +1018,7 @@ static void startGameLoop()
 			if (!war_getDisableReplayRecording())
 			{
 				WZGameReplayOptionsHandler replayOptions;
-				NETreplaySaveStart((currentGameMode == ActivitySink::GameMode::MULTIPLAYER) ? "multiplay" : "skirmish", replayOptions, (currentGameMode == ActivitySink::GameMode::MULTIPLAYER));
+				NETreplaySaveStart((currentGameMode == ActivitySink::GameMode::MULTIPLAYER) ? "multiplay" : "skirmish", replayOptions, war_getMaxReplaysSaved(), (currentGameMode == ActivitySink::GameMode::MULTIPLAYER));
 			}
 			break;
 		}
@@ -1583,7 +1583,13 @@ static void wzCmdInterfaceShutdown()
 
 static void cleanupOldLogFiles()
 {
-	constexpr int MAX_OLD_LOGS = 50;
+	const int MAX_OLD_LOGS = war_getOldLogsLimit();
+	if (MAX_OLD_LOGS < 0)
+	{
+		// skip cleanup
+		return;
+	}
+
 	ASSERT_OR_RETURN(, PHYSFS_isInit() != 0, "PhysFS isn't initialized");
 	// safety check to ensure we *never* delete the current log file
 	WzString fullCurrentLogFileName = WzString::fromUtf8(getDefaultLogFilePath("/"));

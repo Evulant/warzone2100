@@ -74,6 +74,7 @@
 #include "template.h"
 #include "multiint.h"
 #include "challenge.h"
+#include "multistat.h"
 
 #include "wzapi.h"
 #include "qtscript.h"
@@ -252,7 +253,7 @@ static nlohmann::ordered_json fillMainModel()
 	                               "LDS_EXPAND_LIMBO", "LDS_MKEEP_LIMBO", "LDS_NONE",
 	                               "LDS_MULTI_TYPE_START", "CAMPAIGN", "", "SKIRMISH", "", "", "",
 	                               "MULTI_SKIRMISH2", "MULTI_SKIRMISH3", "MULTI_SKIRMISH4" };
-	const std::vector<std::string> difficulty_type = { "EASY", "NORMAL", "HARD", "INSANE" };
+	const std::vector<std::string> difficulty_type = { "SUPEREASY", "EASY", "NORMAL", "HARD", "INSANE" };
 	nlohmann::ordered_json result = nlohmann::ordered_json::object();
 
 	int8_t gameType = static_cast<int8_t>(game.type);
@@ -294,8 +295,8 @@ static nlohmann::ordered_json fillMainModel()
 static nlohmann::ordered_json fillPlayerModel(int i)
 {
 	nlohmann::ordered_json result = nlohmann::ordered_json::object();
-	result["ingame.skScores score"] = ingame.skScores[i][0];
-	result["ingame.skScores kills"] = ingame.skScores[i][1];
+	result["playerStats score"] = getMultiPlayRecentScore(i);
+	result["playerStats kills"] = getMultiPlayUnitsKilled(i);
 	result["NetPlay.players.name"] = NetPlay.players[i].name;
 	result["NetPlay.players.position"] = NetPlay.players[i].position;
 	result["NetPlay.players.colour"] = NetPlay.players[i].colour;
@@ -508,7 +509,7 @@ static void TabButtonDisplayFunc(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffse
 
 	if (haveText)
 	{
-		cache.text.setText(psButton->pText.toUtf8(), psButton->FontID);
+		cache.text.setText(psButton->pText, psButton->FontID);
 		int fw = cache.text.width();
 		int fx = x0 + (psButton->width() - fw) / 2;
 		int fy = y0 + (psButton->height() - cache.text.lineSize()) / 2 - cache.text.aboveBase();
@@ -651,7 +652,7 @@ public:
 				powerValue = std::stoi(powerString.toStdString());
 			}
 			catch (const std::exception&) {
-				debug(LOG_ERROR, "Invalid power value (not convertable to an integer - use numbers only): %s", powerString.toUtf8().c_str());
+				debug(LOG_ERROR, "Invalid power value (not convertible to an integer - use numbers only): %s", powerString.toUtf8().c_str());
 				return;
 			}
 			auto selectedPlayerCopy = selectedPlayer;
@@ -1347,7 +1348,7 @@ public:
 			currentMaxColumnWidths[1][1] = 0;
 			for (const auto& str : view_type)
 			{
-				currentMaxColumnWidths[1][1] = std::max(currentMaxColumnWidths[1][1], static_cast<size_t>(iV_GetTextWidth(str.toUtf8().c_str(), font_regular)));
+				currentMaxColumnWidths[1][1] = std::max(currentMaxColumnWidths[1][1], static_cast<size_t>(iV_GetTextWidth(str, font_regular)));
 			}
 			currentMaxColumnWidths[1][2] = static_cast<size_t>(width() - currentMaxColumnWidths[1][0] - currentMaxColumnWidths[1][1]);
 		}

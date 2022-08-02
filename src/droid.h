@@ -62,6 +62,7 @@ enum PICKTILE
 extern DROID	*psLastDroidHit;
 
 std::priority_queue<int> copy_experience_queue(int player);
+int getTopExperience(int player);
 void add_to_experience_queue(int player, int value);
 
 // initialise droid module
@@ -81,6 +82,7 @@ struct INITIAL_DROID_ORDERS
 DROID *buildDroid(DROID_TEMPLATE *pTemplate, UDWORD x, UDWORD y, UDWORD player, bool onMission, const INITIAL_DROID_ORDERS *initialOrders, Rotation rot = Rotation());
 /// Creates a droid locally, instead of sending a message, even if the bMultiMessages HACK is set to true.
 DROID *reallyBuildDroid(const DROID_TEMPLATE *pTemplate, Position pos, UDWORD player, bool onMission, Rotation rot = Rotation());
+DROID *reallyBuildDroid(const DROID_TEMPLATE *pTemplate, Position pos, UDWORD player, bool onMission, Rotation rot, uint32_t id);
 
 /* Set the asBits in a DROID structure given it's template. */
 void droidSetBits(const DROID_TEMPLATE *pTemplate, DROID *psDroid);
@@ -182,6 +184,7 @@ bool calcDroidMuzzleBaseLocation(const DROID *psDroid, Vector3i *muzzle, int wea
 
 /* Droid experience stuff */
 unsigned int getDroidLevel(const DROID *psDroid);
+unsigned int getDroidLevel(unsigned int experience, uint8_t player, uint8_t brainComponent);
 UDWORD getDroidEffectiveLevel(const DROID *psDroid);
 const char *getDroidLevelName(const DROID *psDroid);
 

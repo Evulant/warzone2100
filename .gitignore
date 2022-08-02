@@ -262,7 +262,6 @@ data/*config*/*
 data/config/*
 data/etc/*
 data/std*.txt
-data/fonts/
 devpkg/*
 [Dd]ebug/
 *.opensdf
@@ -309,3 +308,8 @@ win32/CodeAnalyst
 !.ci/vcpkg/overlay-ports/*/*.patch
 # Do not ignore patches in quickjs patches folder
 !3rdparty/quickjs/patches/*.patch
+
+# JetBrains IDEs like CLion
+/.idea/
+/cmake-build-*/
+/out/

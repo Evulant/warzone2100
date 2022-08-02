@@ -43,6 +43,22 @@
 
 // WzMultiplayerOptionsTitleUI is in titleui.h to prevent dependency explosions
 
+struct WzMultiButton : public W_BUTTON
+{
+	WzMultiButton() : W_BUTTON() {}
+
+	void display(int xOffset, int yOffset) override;
+
+	AtlasImage imNormal;
+	AtlasImage imDown;
+	unsigned doHighlight;
+	unsigned tc;
+	uint8_t alpha = 255;
+	unsigned downStateMask = WBUT_DOWN | WBUT_LOCK | WBUT_CLICKLOCK;
+	unsigned greyStateMask = WBUT_DISABLE;
+	optional<bool> drawBlueBorder;
+};
+
 void calcBackdropLayoutForMultiplayerOptionsTitleUI(WIDGET *psWidget);
 void readAIs();	///< step 1, load AI definition files
 void loadMultiScripts();	///< step 2, load the actual AI scripts
@@ -63,11 +79,12 @@ void intDisplayFeBox_Spectator(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 
 std::shared_ptr<W_BUTTON> addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS, uint8_t alpha = 255);
 /**
- * @deprecated use `addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS)` instead
+ * @deprecated use `addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS, uint8_t alpha = 255)` instead
  **/
 std::shared_ptr<W_BUTTON> addMultiBut(const std::shared_ptr<W_SCREEN> &screen, UDWORD formid, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS, uint8_t alpha = 255);
+std::shared_ptr<WzMultiButton> makeMultiBut(UDWORD id, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc, uint8_t alpha = 255);
 
-Image mpwidgetGetFrontHighlightImage(Image image);
+AtlasImage mpwidgetGetFrontHighlightImage(AtlasImage image);
 bool changeColour(unsigned player, int col, bool isHost);
 
 extern char sPlayer[128];
@@ -159,7 +176,7 @@ void multiClearHostRequestMoveToPlayer(uint32_t playerIdx);
 //Team chooser
 #define MULTIOP_TEAMS_START		102310			//List of teams
 #define MULTIOP_TEAMS_END		102341
-#define MULTIOP_TEAMSWIDTH		29
+#define MULTIOP_TEAMSWIDTH		28
 #define	MULTIOP_TEAMSHEIGHT		38
 
 #define MULTIOP_TEAMCHOOSER_FORM		102800
@@ -267,7 +284,7 @@ void multiClearHostRequestMoveToPlayer(uint32_t playerIdx);
 
 #define MULTIOP_COLOUR_START		10332
 #define MULTIOP_COLOUR_END		(MULTIOP_COLOUR_START + MAX_PLAYERS)
-#define MULTIOP_COLOUR_WIDTH		31
+#define MULTIOP_COLOUR_WIDTH		29
 
 #define MULTIOP_AI_FORM			(MULTIOP_COLOUR_END + 1)
 #define MULTIOP_AI_START		(MULTIOP_AI_FORM + 1)

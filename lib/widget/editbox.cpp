@@ -237,7 +237,7 @@ void W_EDITBOX::fitStringStart()
 
 	while (!tmp.isEmpty())
 	{
-		int pixelWidth = iV_GetTextWidth(tmp.toUtf8().c_str(), FontID);
+		int pixelWidth = iV_GetTextWidth(tmp, FontID);
 
 		if (pixelWidth <= width() - (WEDB_XGAP * 2 + WEDB_CURSORSIZE))
 		{
@@ -263,7 +263,7 @@ void W_EDITBOX::fitStringEnd()
 
 	while (!tmp.isEmpty())
 	{
-		int pixelWidth = iV_GetTextWidth(tmp.toUtf8().c_str(), FontID);
+		int pixelWidth = iV_GetTextWidth(tmp, FontID);
 
 		if (pixelWidth <= width() - (WEDB_XGAP * 2 + WEDB_CURSORSIZE))
 		{
@@ -290,7 +290,7 @@ void W_EDITBOX::setCursorPosPixels(int xPos)
 	int prevPos = printStart + tmp.length();
 	while (!tmp.isEmpty())
 	{
-		int pixelWidth = iV_GetTextWidth(tmp.toUtf8().c_str(), FontID);
+		int pixelWidth = iV_GetTextWidth(tmp, FontID);
 		int delta = pixelWidth - (xPos - (WEDB_XGAP + WEDB_CURSORSIZE / 2));
 		int pos = printStart + tmp.length();
 
@@ -677,38 +677,43 @@ void W_EDITBOX::display(int xOffset, int yOffset)
 		iV_ShadowBox(x0, y0, x1, y1, 0, boxColourFirst, boxColourSecond, boxColourBackground);
 	}
 
-	int fx = x0 + WEDB_XGAP;// + (psEdBox->width - fw) / 2;
-
-	int fy = y0 + (height() - iV_GetTextLineSize(FontID)) / 2 - iV_GetTextAboveBase(FontID);
-
 	/* If there is more text than will fit into the box, display the bit with the cursor in it */
 	WzString displayedText = aText;
 	displayedText.remove(0, printStart);  // Erase anything there isn't room to display.
 	displayedText.remove(printChars, displayedText.length());
 
+	PIELIGHT displayedTextColor = WZCOL_FORM_TEXT;
 	if (aText.isEmpty() && !placeholderText.isEmpty())
 	{
-		displayCache.wzDisplayedText.setText(placeholderText.toUtf8(), FontID);
-		displayCache.wzDisplayedText.render(fx, fy, (state & WEDBS_MASK) == WEDBS_FIXED ? WZCOL_FORM_TEXT : WZCOL_GREY);
+		displayCache.wzDisplayedText.setText(placeholderText, FontID);
+		displayedTextColor = (state & WEDBS_MASK) == WEDBS_FIXED ? WZCOL_FORM_TEXT : WZCOL_GREY;
 	}
 	else
 	{
-		displayCache.wzDisplayedText.setText(displayedText.toUtf8(), FontID);
-		displayCache.wzDisplayedText.render(fx, fy, WZCOL_FORM_TEXT);
+		displayCache.wzDisplayedText.setText(displayedText, FontID);
 	}
+
+	int lineSize = displayCache.wzDisplayedText.lineSize();
+	int aboveBase = displayCache.wzDisplayedText.aboveBase();
+	int belowBase = displayCache.wzDisplayedText.belowBase();
+
+	int fx = x0 + WEDB_XGAP;// + (psEdBox->width - fw) / 2;
+	int fy = y0 + (height() - lineSize) / 2 - aboveBase;
+
+	displayCache.wzDisplayedText.render(fx, fy, WZCOL_FORM_TEXT);
 
 	// Display the cursor if editing
 	if (((wzGetTicks() - blinkOffset) / WEDB_BLINKRATE) % 2 == 0)
 	{
 		auto visibleTextBeforeCursor = aText.substr(printStart, insPos - printStart);
-		displayCache.modeText.setText(visibleTextBeforeCursor.toUtf8(), FontID);
+		displayCache.modeText.setText(visibleTextBeforeCursor, FontID);
 		int cursorX = x0 + WEDB_XGAP + displayCache.modeText.width();
 		int cursorY = fy;
 
 		if ((state & WEDBS_MASK) == WEDBS_INSERT)
 		{
 			// insert mode
-			iV_Line(cursorX, cursorY + iV_GetTextAboveBase(FontID), cursorX, cursorY - iV_GetTextBelowBase(FontID), WZCOL_FORM_CURSOR);
+			iV_Line(cursorX, cursorY + aboveBase, cursorX, cursorY - belowBase, WZCOL_FORM_CURSOR);
 		}
 		else if ((state & WEDBS_MASK) == WEDBS_OVER)
 		{
